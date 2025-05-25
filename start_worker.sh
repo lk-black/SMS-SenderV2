@@ -1,34 +1,59 @@
 #!/usr/bin/env bash
-# Worker startup script with health checks
-set -o errexit
+# Worker startup script with comprehensive health checks
+set -e
 
-echo "Starting Celery worker with health checks..."
+echo "🚀 Iniciando Celery Worker com verificações de saúde..."
 
-# Wait for Redis to be available
-echo "Checking Redis connection..."
+# Aguardar serviços essenciais
+./wait_for_db.sh echo "Serviços prontos para worker"
+
+# Verificar configuração do Celery
+echo "🔧 Verificando configuração do Celery..."
 python -c "
-import os
-import redis
-import time
-import sys
-from decouple import config
+from sms_sender.celery import app
+print(f'✅ App: {app.main}')
+print(f'✅ Broker: {app.conf.broker_url}')
+print(f'✅ Backend: {app.conf.result_backend}')
+print('✅ Configuração do Celery válida!')
+"
 
-redis_url = config('REDIS_URL', default='redis://localhost:6379/0')
-max_retries = 30
-retry_count = 0
+# Verificar se as tasks estão registradas
+echo "📋 Verificando tasks registradas..."
+python -c "
+from sms_sender.celery import app
+tasks = [name for name in app.tasks if not name.startswith('celery.')]
+print(f'✅ Tasks encontradas: {len(tasks)}')
+for task in tasks:
+    print(f'  - {task}')
+"
 
-while retry_count < max_retries:
-    try:
-        r = redis.from_url(redis_url)
-        r.ping()
-        print('Redis connection successful!')
-        break
-    except Exception as e:
-        retry_count += 1
-        print(f'Redis connection attempt {retry_count}/{max_retries} failed: {e}')
-        if retry_count >= max_retries:
-            print('Failed to connect to Redis after maximum retries')
-            sys.exit(1)
+# Função para cleanup em caso de interrupção
+cleanup() {
+    echo '🔄 Recebido sinal de parada, finalizando worker...'
+    kill -TERM "\$child" 2>/dev/null
+    wait "\$child"
+    exit 0
+}
+
+# Capturar sinais para cleanup graceful
+trap cleanup SIGTERM SIGINT
+
+echo "🎯 Iniciando Celery Worker..."
+
+# Iniciar worker com configurações otimizadas
+celery -A sms_sender worker \
+    --loglevel=info \
+    --concurrency=4 \
+    --pool=prefork \
+    --max-tasks-per-child=1000 \
+    --time-limit=300 \
+    --soft-time-limit=240 \
+    --without-gossip \
+    --without-mingle \
+    --without-heartbeat &
+
+child=\$!
+wait "\$child"
         time.sleep(2)
 "
 

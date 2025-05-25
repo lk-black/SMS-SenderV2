@@ -156,7 +156,7 @@ def update_payment_status(webhook_event_id, new_status):
 
 
 @shared_task
-def test_task_connection():
+def test_task_connection(test_message="Teste de conexão"):
     """
     Task simples para testar conexão Redis/Celery
     """

@@ -1,0 +1,143 @@
+version: '3.8'
+
+services:
+  # Database PostgreSQL para desenvolvimento
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_DB=sms_sender_dev_db
+      - POSTGRES_USER=sms_dev_user
+      - POSTGRES_PASSWORD=sms_dev_password
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sms_dev_user -d sms_sender_dev_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis para desenvolvimento
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_dev_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Web Application em modo desenvolvimento
+  web:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      sh -c "./wait_for_db.sh &&
+             python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=1
+      - DATABASE_URL=postgresql://sms_dev_user:sms_dev_password@db:5432/sms_sender_dev_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_TASK_ALWAYS_EAGER=False
+      - DJANGO_SETTINGS_MODULE=sms_sender.settings
+    env_file:
+      - .env
+
+  # Celery Worker para desenvolvimento
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      sh -c "./wait_for_db.sh &&
+             celery -A sms_sender worker 
+                    --loglevel=debug 
+                    --concurrency=2 
+                    --pool=prefork"
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=1
+      - DATABASE_URL=postgresql://sms_dev_user:sms_dev_password@db:5432/sms_sender_dev_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_TASK_ALWAYS_EAGER=False
+      - DJANGO_SETTINGS_MODULE=sms_sender.settings
+    env_file:
+      - .env
+
+  # Celery Beat para desenvolvimento
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      sh -c "./wait_for_db.sh &&
+             celery -A sms_sender beat 
+                    --loglevel=debug"
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=1
+      - DATABASE_URL=postgresql://sms_dev_user:sms_dev_password@db:5432/sms_sender_dev_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_TASK_ALWAYS_EAGER=False
+      - DJANGO_SETTINGS_MODULE=sms_sender.settings
+    env_file:
+      - .env
+
+  # Flower para monitoramento
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      sh -c "./wait_for_db.sh &&
+             celery -A sms_sender flower 
+                    --port=5555"
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - celery
+    environment:
+      - DEBUG=1
+      - DATABASE_URL=postgresql://sms_dev_user:sms_dev_password@db:5432/sms_sender_dev_db
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:

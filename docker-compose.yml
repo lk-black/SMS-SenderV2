@@ -1,68 +1,188 @@
 version: '3.8'
 
 services:
-  web:
-    build: .
-    command: python manage.py runserver 0.0.0.0:8000
-    volumes:
-      - .:/app
-    ports:
-      - "8000:8000"
-    depends_on:
-      - db
-      - redis
-    environment:
-      - DEBUG=1
-      - DATABASE_URL=postgresql://sms_user:sms_password@db:5432/sms_sender_db
-      - REDIS_URL=redis://redis:6379/0
-    env_file:
-      - .env
-
+  # Database PostgreSQL
   db:
-    image: postgres:15
+    image: postgres:15-alpine
+    restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data/
     environment:
       - POSTGRES_DB=sms_sender_db
       - POSTGRES_USER=sms_user
       - POSTGRES_PASSWORD=sms_password
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sms_user -d sms_sender_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sms_network
 
+  # Redis Cache/Message Broker
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - sms_network
 
+  # Web Application
+  web:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      sh -c "./wait_for_db.sh &&
+             python manage.py migrate &&
+             gunicorn --bind 0.0.0.0:8000 
+                      --workers 3 
+                      --timeout 120 
+                      --access-logfile - 
+                      --error-logfile - 
+                      --log-level info 
+                      sms_sender.wsgi:application"
+    volumes:
+      - .:/app
+      - static_volume:/app/staticfiles
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DEBUG=0
+      - DATABASE_URL=postgresql://sms_user:sms_password@db:5432/sms_sender_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_TASK_ALWAYS_EAGER=False
+      - DJANGO_SETTINGS_MODULE=sms_sender.settings
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/webhooks/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - sms_network
+
+  # Celery Worker
   celery:
-    build: .
-    command: celery -A sms_sender worker --loglevel=info
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      sh -c "./wait_for_db.sh &&
+             celery -A sms_sender worker 
+                    --loglevel=info 
+                    --concurrency=4 
+                    --pool=prefork 
+                    --max-tasks-per-child=1000
+                    --time-limit=300
+                    --soft-time-limit=240"
     volumes:
       - .:/app
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      - DEBUG=1
+      - DEBUG=0
       - DATABASE_URL=postgresql://sms_user:sms_password@db:5432/sms_sender_db
       - REDIS_URL=redis://redis:6379/0
+      - CELERY_TASK_ALWAYS_EAGER=False
+      - DJANGO_SETTINGS_MODULE=sms_sender.settings
     env_file:
       - .env
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A sms_sender inspect ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - sms_network
 
+  # Celery Beat Scheduler
   celery-beat:
-    build: .
-    command: celery -A sms_sender beat --loglevel=info
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      sh -c "./wait_for_db.sh &&
+             celery -A sms_sender beat 
+                    --loglevel=info 
+                    --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     volumes:
       - .:/app
+      - celery_beat_data:/app/celerybeat-schedule
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      - DEBUG=1
+      - DEBUG=0
       - DATABASE_URL=postgresql://sms_user:sms_password@db:5432/sms_sender_db
       - REDIS_URL=redis://redis:6379/0
+      - CELERY_TASK_ALWAYS_EAGER=False
+      - DJANGO_SETTINGS_MODULE=sms_sender.settings
     env_file:
       - .env
+    networks:
+      - sms_network
+
+  # Celery Flower (Monitoring) - Opcional
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: >
+      sh -c "./wait_for_db.sh &&
+             celery -A sms_sender flower 
+                    --port=5555 
+                    --basic_auth=admin:admin123"
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - celery
+    environment:
+      - DEBUG=0
+      - DATABASE_URL=postgresql://sms_user:sms_password@db:5432/sms_sender_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_TASK_ALWAYS_EAGER=False
+    env_file:
+      - .env
+    networks:
+      - sms_network
 
 volumes:
   postgres_data:
+  redis_data:
+  static_volume:
+  celery_beat_data:
+
+networks:
+  sms_network:
+    driver: bridge
