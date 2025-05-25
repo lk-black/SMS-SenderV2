@@ -27,7 +27,7 @@ services:
     env: python
     plan: starter
     buildCommand: "./build.sh"
-    startCommand: "celery -A sms_sender worker --loglevel=info"
+    startCommand: "celery -A sms_sender worker --loglevel=info --pool=solo --concurrency=1"
 
   - type: worker
     name: sms-sender-beat
