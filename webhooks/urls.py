@@ -22,6 +22,9 @@ urlpatterns = [
     # Endpoint principal para receber webhooks da TriboPay
     path('tribopay/', views.TribopayWebhookView.as_view(), name='tribopay-webhook'),
     
+    # Endpoint alternativo function-based (para debug)
+    path('tribopay-func/', views.tribopay_webhook, name='tribopay-func'),
+    
     # Endpoints para monitoramento e auditoria
     path('events/', views.WebhookEventListView.as_view(), name='webhook-events'),
     path('events/<int:pk>/', views.WebhookEventDetailView.as_view(), name='webhook-event-detail'),
