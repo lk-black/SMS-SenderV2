@@ -21,16 +21,22 @@ services:
         generateValue: true
       - key: ALLOWED_HOSTS
         value: "*.onrender.com"
+      - key: DJANGO_SETTINGS_MODULE
+        value: "sms_sender.settings"
 
   - type: worker
     name: sms-sender-worker
     env: python
     plan: starter
     buildCommand: "./build.sh"
-    startCommand: "python -m celery -A sms_sender worker --loglevel=info --pool=solo"
+    startCommand: "celery -A sms_sender worker --loglevel=info --pool=solo --concurrency=1"
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
+      - key: DEBUG
+        value: false
+      - key: DJANGO_SETTINGS_MODULE
+        value: "sms_sender.settings"
 
   - type: worker
     name: sms-sender-beat
@@ -38,6 +44,13 @@ services:
     plan: starter
     buildCommand: "./build.sh"
     startCommand: "celery -A sms_sender beat --loglevel=info"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: DEBUG
+        value: false
+      - key: DJANGO_SETTINGS_MODULE
+        value: "sms_sender.settings"
 
 databases:
   - name: sms-sender-db

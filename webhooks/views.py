@@ -10,7 +10,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from celery import inspect
+from celery import current_app
 import redis
 
 from .models import WebhookEvent, SMSLog
@@ -1444,7 +1444,7 @@ def worker_diagnosis(request):
         # 3. Inspeção do Worker
         try:
             from sms_sender.celery import app
-            i = inspect.Inspect(app=app)
+            i = app.control.inspect()
             
             # Usar timeout para evitar travamento
             active_workers = i.active()
