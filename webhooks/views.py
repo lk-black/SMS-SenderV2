@@ -854,20 +854,62 @@ class GhostPayWebhookView(generics.GenericAPIView):
         webhook_id = None
         
         try:
+            # Log informações brutas da requisição para debug
+            webhook_structured_logger.logger.info(f"🔍 GhostPay Raw Request - Content-Type: {request.content_type}")
+            webhook_structured_logger.logger.info(f"🔍 GhostPay Raw Request - Body: {request.body.decode('utf-8', errors='ignore')}")
+            
+            # Parse manual do JSON para evitar problemas de encoding
+            request_data = None
+            
+            # Tentar parse manual do JSON
+            if request.body:
+                try:
+                    # Primeiro tentar decode UTF-8 padrão
+                    body_str = request.body.decode('utf-8')
+                    request_data = json.loads(body_str)
+                except UnicodeDecodeError:
+                    # Se falhar, tentar com ISO-8859-1
+                    try:
+                        body_str = request.body.decode('iso-8859-1')
+                        request_data = json.loads(body_str)
+                    except:
+                        # Como último recurso, usar o request.data do DRF
+                        request_data = request.data
+                except json.JSONDecodeError as e:
+                    # Log detalhado do erro JSON
+                    webhook_structured_logger.logger.error(f"❌ GhostPay JSON Parse Error: {str(e)}")
+                    webhook_structured_logger.logger.error(f"❌ Problematic JSON: {request.body.decode('utf-8', errors='replace')}")
+                    
+                    processing_time = time.time() - start_time
+                    webhook_structured_logger.log_webhook_processed(
+                        platform=platform,
+                        webhook_id='unknown',
+                        success=False,
+                        error=f"JSON parse error - {str(e)}",
+                        processing_time=processing_time
+                    )
+                    return Response(
+                        {"error": "JSON inválido", "details": str(e)},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                # Se não há body, usar request.data
+                request_data = request.data
+            
             # Log do webhook recebido
             webhook_structured_logger.log_webhook_received(
                 platform=platform,
-                webhook_data=request.data,
+                webhook_data=request_data,
                 request_info=request.META
             )
             
             # Validar dados do webhook
-            serializer = self.get_serializer(data=request.data)
+            serializer = self.get_serializer(data=request_data)
             if not serializer.is_valid():
                 processing_time = time.time() - start_time
                 webhook_structured_logger.log_webhook_processed(
                     platform=platform,
-                    webhook_id=str(request.data.get('paymentId', 'unknown')),
+                    webhook_id=str(request_data.get('paymentId', 'unknown')),
                     success=False,
                     error=f"Dados inválidos: {serializer.errors}",
                     processing_time=processing_time
@@ -1000,4 +1042,118 @@ def ghostpay_test_format(request):
         return JsonResponse({
             'status': 'error',
             'message': str(e)
+        }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def ghostpay_debug(request):
+    """
+    Endpoint de debug para capturar exatamente o que a GhostPay está enviando
+    """
+    try:
+        # Capturar todos os dados da requisição
+        debug_data = {
+            'method': request.method,
+            'headers': dict(request.headers),
+            'content_type': request.content_type,
+            'body_raw': request.body.decode('utf-8', errors='replace'),
+            'body_length': len(request.body) if request.body else 0,
+            'POST': dict(request.POST),
+            'GET': dict(request.GET),
+        }
+        
+        # Tentar diferentes métodos de parse
+        json_attempts = []
+        
+        # Tentativa 1: UTF-8 padrão
+        if request.body:
+            try:
+                body_utf8 = request.body.decode('utf-8')
+                parsed_json = json.loads(body_utf8)
+                json_attempts.append({
+                    'method': 'utf-8',
+                    'success': True,
+                    'data': parsed_json
+                })
+            except Exception as e:
+                json_attempts.append({
+                    'method': 'utf-8',
+                    'success': False,
+                    'error': str(e)
+                })
+            
+            # Tentativa 2: ISO-8859-1
+            try:
+                body_iso = request.body.decode('iso-8859-1')
+                parsed_json = json.loads(body_iso)
+                json_attempts.append({
+                    'method': 'iso-8859-1',
+                    'success': True,
+                    'data': parsed_json
+                })
+            except Exception as e:
+                json_attempts.append({
+                    'method': 'iso-8859-1',
+                    'success': False,
+                    'error': str(e)
+                })
+        
+        # Tentativa 3: request.data do DRF
+        try:
+            drf_data = request.data
+            json_attempts.append({
+                'method': 'drf_request_data',
+                'success': True,
+                'data': drf_data
+            })
+        except Exception as e:
+            json_attempts.append({
+                'method': 'drf_request_data',
+                'success': False,
+                'error': str(e)
+            })
+        
+        debug_data['json_parse_attempts'] = json_attempts
+        
+        # Log os dados de debug
+        logger.info(f"GhostPay Debug: {json.dumps(debug_data, indent=2, ensure_ascii=False, default=str)}")
+        
+        # Encontrar o primeiro parse bem-sucedido
+        successful_parse = next((attempt for attempt in json_attempts if attempt['success']), None)
+        
+        if successful_parse:
+            # Tentar processar com o serializer
+            try:
+                from .serializers import GhostPayWebhookSerializer
+                serializer = GhostPayWebhookSerializer(data=successful_parse['data'])
+                
+                if serializer.is_valid():
+                    webhook_data = serializer.to_webhook_event_data()
+                    debug_data['serializer_result'] = {
+                        'success': True,
+                        'webhook_data': webhook_data
+                    }
+                else:
+                    debug_data['serializer_result'] = {
+                        'success': False,
+                        'errors': serializer.errors
+                    }
+            except Exception as e:
+                debug_data['serializer_result'] = {
+                    'success': False,
+                    'error': str(e)
+                }
+        
+        return JsonResponse({
+            'status': 'debug_complete',
+            'debug_data': debug_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro no debug GhostPay: {str(e)}")
+        return JsonResponse({
+            'status': 'debug_error',
+            'error': str(e)
         }, status=500)

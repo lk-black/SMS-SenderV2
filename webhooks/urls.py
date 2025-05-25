@@ -47,4 +47,5 @@ urlpatterns = [
     # GhostPay endpoints
     path('ghostpay/', views.GhostPayWebhookView.as_view(), name='ghostpay-webhook'),
     path('ghostpay-test/', views.ghostpay_test_format, name='ghostpay-test'),
+    path('ghostpay-debug/', views.ghostpay_debug, name='ghostpay-debug'),
 ]
