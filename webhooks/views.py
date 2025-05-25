@@ -561,3 +561,60 @@ def tribopay_flexible(request):
     except Exception as e:
         logger.error(f"Erro geral no webhook flexível: {str(e)}")
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def tribopay_test_format(request):
+    """
+    Endpoint de teste para validar o formato real da TriboPay sem usar banco de dados
+    """
+    try:
+        logger.info(f"TriboPay Test Format - Data received: {request.data}")
+        
+        # Testar o serializer real da TriboPay
+        from .serializers import TribePayRealWebhookSerializer
+        
+        serializer = TribePayRealWebhookSerializer(data=request.data)
+        if serializer.is_valid():
+            # Converter para formato do webhook event
+            webhook_data = serializer.to_webhook_event_data()
+            
+            # Log dos dados processados
+            logger.info(f"TriboPay Test - Dados processados: {webhook_data}")
+            
+            # Verificar se é PIX aguardando pagamento
+            is_pix_waiting = (
+                webhook_data.get('payment_method') == 'pix' and 
+                webhook_data.get('payment_status') in ['waiting', 'pending']
+            )
+            
+            return JsonResponse({
+                'status': 'success',
+                'message': 'Formato TriboPay validado com sucesso',
+                'data': {
+                    'payment_id': webhook_data.get('payment_id'),
+                    'payment_method': webhook_data.get('payment_method'),
+                    'payment_status': webhook_data.get('payment_status'),
+                    'amount': webhook_data.get('amount'),
+                    'amount_in_real': webhook_data.get('amount', 0) / 100,
+                    'customer_phone': webhook_data.get('customer_phone'),
+                    'customer_name': webhook_data.get('customer_name'),
+                    'is_pix_waiting': is_pix_waiting,
+                    'would_schedule_sms': is_pix_waiting
+                }
+            })
+        else:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Formato inválido',
+                'errors': serializer.errors
+            }, status=400)
+            
+    except Exception as e:
+        logger.error(f"Erro no teste de formato: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)

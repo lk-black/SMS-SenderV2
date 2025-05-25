@@ -30,4 +30,7 @@ urlpatterns = [
     
     # Endpoint para testar envio de SMS
     path('test-sms/', views.TestSMSView.as_view(), name='test-sms'),
+    
+    # TriboPay test format endpoint (no database)
+    path('tribopay-test/', views.tribopay_test_format, name='tribopay-test'),
 ]
