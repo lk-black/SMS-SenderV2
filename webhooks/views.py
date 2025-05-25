@@ -412,3 +412,150 @@ def force_migrate(request):
             'status': 'error',
             'error': str(e)
         }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def tribopay_raw_debug(request):
+    """
+    Endpoint de debug para capturar exatamente o que a TriboPay está enviando
+    """
+    import json
+    from django.http import HttpResponse
+    
+    try:
+        # Capturar todos os dados da requisição
+        debug_data = {
+            'method': request.method,
+            'headers': dict(request.headers),
+            'content_type': request.content_type,
+            'body_raw': request.body.decode('utf-8', errors='ignore'),
+            'POST': dict(request.POST),
+            'GET': dict(request.GET),
+        }
+        
+        # Tentar fazer parse do JSON se possível
+        if request.content_type == 'application/json' and request.body:
+            try:
+                debug_data['body_json'] = json.loads(request.body)
+            except json.JSONDecodeError as e:
+                debug_data['json_error'] = str(e)
+        
+        # Log the debug data
+        logger.info(f"TriboPay Raw Debug: {json.dumps(debug_data, indent=2, ensure_ascii=False)}")
+        
+        # Retornar uma resposta simples que a TriboPay pode aceitar
+        return HttpResponse('OK', status=200)
+        
+    except Exception as e:
+        logger.error(f"Erro no debug raw: {str(e)}")
+        return HttpResponse('ERROR', status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def tribopay_flexible(request):
+    """
+    Endpoint flexível para receber webhooks da TriboPay com diferentes formatos
+    """
+    import json
+    
+    try:
+        logger.info(f"TriboPay Flexible - Headers: {dict(request.headers)}")
+        logger.info(f"TriboPay Flexible - Content-Type: {request.content_type}")
+        logger.info(f"TriboPay Flexible - Body: {request.body.decode('utf-8', errors='ignore')}")
+        
+        # Tentar extrair dados de diferentes formatos
+        webhook_data = None
+        
+        # Formato 1: JSON direto
+        if request.content_type == 'application/json' and request.body:
+            try:
+                webhook_data = json.loads(request.body)
+                logger.info(f"Dados JSON recebidos: {webhook_data}")
+            except json.JSONDecodeError:
+                pass
+        
+        # Formato 2: Form data
+        if not webhook_data and request.POST:
+            webhook_data = dict(request.POST)
+            logger.info(f"Dados POST recebidos: {webhook_data}")
+        
+        # Formato 3: Query parameters
+        if not webhook_data and request.GET:
+            webhook_data = dict(request.GET)
+            logger.info(f"Dados GET recebidos: {webhook_data}")
+        
+        # Se ainda não temos dados, tentar parse manual
+        if not webhook_data and request.body:
+            body_str = request.body.decode('utf-8', errors='ignore')
+            # Tentar diferentes formatos
+            if body_str.startswith('{'):
+                try:
+                    webhook_data = json.loads(body_str)
+                except:
+                    pass
+        
+        if webhook_data:
+            # Criar um evento webhook simplificado
+            try:
+                from .models import WebhookEvent
+                import hashlib
+                
+                # Gerar hash para evitar duplicatas
+                data_str = json.dumps(webhook_data, sort_keys=True)
+                webhook_hash = hashlib.sha256(data_str.encode()).hexdigest()
+                
+                # Tentar extrair campos básicos de diferentes estruturas
+                payment_id = webhook_data.get('id') or webhook_data.get('payment_id') or webhook_data.get('transaction_id')
+                payment_method = webhook_data.get('payment_method') or webhook_data.get('method') or 'unknown'
+                payment_status = webhook_data.get('payment_status') or webhook_data.get('status') or 'unknown'
+                amount = webhook_data.get('amount') or webhook_data.get('value') or 0
+                
+                # Extrair dados do cliente
+                customer_data = webhook_data.get('customer', {})
+                if isinstance(customer_data, str):
+                    try:
+                        customer_data = json.loads(customer_data)
+                    except:
+                        customer_data = {}
+                
+                customer_phone = customer_data.get('phone_number') or customer_data.get('phone') or ''
+                customer_name = customer_data.get('name') or customer_data.get('customer_name') or ''
+                customer_email = customer_data.get('email') or customer_data.get('customer_email') or ''
+                
+                # Criar registro se não existe
+                webhook_event, created = WebhookEvent.objects.get_or_create(
+                    webhook_hash=webhook_hash,
+                    defaults={
+                        'payment_id': payment_id,
+                        'payment_method': payment_method,
+                        'payment_status': payment_status,
+                        'amount': int(amount) if amount else 0,
+                        'customer_phone': customer_phone,
+                        'customer_name': customer_name,
+                        'customer_email': customer_email,
+                        'raw_data': webhook_data,
+                        'processed': True
+                    }
+                )
+                
+                if created:
+                    logger.info(f"Webhook flexível criado: {webhook_event.id}")
+                else:
+                    logger.info(f"Webhook flexível já existia: {webhook_event.id}")
+                
+                return JsonResponse({'status': 'ok', 'id': webhook_event.id})
+                
+            except Exception as e:
+                logger.error(f"Erro ao processar webhook flexível: {str(e)}")
+                return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+        else:
+            logger.warning("Nenhum dado encontrado no webhook")
+            return JsonResponse({'status': 'error', 'message': 'Nenhum dado encontrado'}, status=400)
+            
+    except Exception as e:
+        logger.error(f"Erro geral no webhook flexível: {str(e)}")
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)

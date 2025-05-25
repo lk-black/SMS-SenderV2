@@ -10,6 +10,12 @@ urlpatterns = [
     # Debug endpoint
     path('debug/', views.debug_db, name='debug-db'),
     
+    # TriboPay raw debug endpoint
+    path('tribopay-debug/', views.tribopay_raw_debug, name='tribopay-debug'),
+    
+    # TriboPay flexible endpoint
+    path('tribopay-flex/', views.tribopay_flexible, name='tribopay-flexible'),
+    
     # Force migrate endpoint
     path('force-migrate/', views.force_migrate, name='force-migrate'),
     
