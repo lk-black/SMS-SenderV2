@@ -1284,7 +1284,7 @@ def force_process_pending_sms(request):
             SMSLog.objects.create(
                 webhook_event=webhook,
                 phone_number=webhook.customer_phone,
-                message_content=f"SMS de recuperação (processamento forçado)",
+                message=f"SMS de recuperação (processamento forçado)",
                 status='sent' if success else 'failed',
                 twilio_sid=message_sid,
                 error_message=error
