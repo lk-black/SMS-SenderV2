@@ -103,8 +103,12 @@ DATABASES = {
 
 # Para produção com PostgreSQL
 DATABASE_URL = config('DATABASE_URL', default=None)
-if DATABASE_URL:
-    DATABASES['default'] = dj_database_url.parse(DATABASE_URL)
+if DATABASE_URL and not DATABASE_URL.startswith('postgresql://user:password'):
+    try:
+        DATABASES['default'] = dj_database_url.parse(DATABASE_URL)
+    except ValueError as e:
+        print(f"Warning: Invalid DATABASE_URL format: {e}. Using SQLite as fallback.")
+        # Continue using SQLite as fallback
 
 
 # Password validation
