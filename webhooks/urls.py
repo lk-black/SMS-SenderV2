@@ -7,6 +7,9 @@ urlpatterns = [
     # Health check endpoint
     path('health/', views.health_check, name='health-check'),
     
+    # Debug endpoint
+    path('debug/', views.debug_db, name='debug-db'),
+    
     # Endpoint principal para receber webhooks da TriboPay
     path('tribopay/', views.TribopayWebhookView.as_view(), name='tribopay-webhook'),
     

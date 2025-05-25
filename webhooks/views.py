@@ -341,3 +341,43 @@ def health_check(request):
             'status': 'unhealthy',
             'error': str(e)
         }, status=500)
+
+
+@csrf_exempt
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def debug_db(request):
+    """
+    Endpoint de debug para verificar status do banco
+    """
+    try:
+        from django.db import connection
+        
+        # Verificar conexão
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            
+        # Verificar se tabelas existem
+        tables_info = {}
+        try:
+            webhook_count = WebhookEvent.objects.count()
+            tables_info['webhook_events'] = f"Table exists, {webhook_count} records"
+        except Exception as e:
+            tables_info['webhook_events'] = f"Error: {str(e)}"
+            
+        try:
+            sms_count = SMSLog.objects.count()
+            tables_info['sms_logs'] = f"Table exists, {sms_count} records"
+        except Exception as e:
+            tables_info['sms_logs'] = f"Error: {str(e)}"
+        
+        return JsonResponse({
+            'status': 'debug',
+            'database': 'connected',
+            'tables': tables_info
+        })
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'error': str(e)
+        }, status=500)
