@@ -1157,3 +1157,45 @@ def ghostpay_debug(request):
             'status': 'debug_error',
             'error': str(e)
         }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def twilio_config_check(request):
+    """
+    Endpoint para verificar se as configurações do Twilio estão corretas
+    """
+    try:
+        from django.conf import settings
+        
+        # Verificar se as variáveis estão definidas
+        account_sid = getattr(settings, 'TWILIO_ACCOUNT_SID', None)
+        auth_token = getattr(settings, 'TWILIO_AUTH_TOKEN', None)
+        phone_number = getattr(settings, 'TWILIO_PHONE_NUMBER', None)
+        
+        config_status = {
+            'account_sid_configured': account_sid is not None and account_sid != 'your_twilio_account_sid',
+            'auth_token_configured': auth_token is not None and auth_token != 'your_twilio_auth_token',
+            'phone_number_configured': phone_number is not None and phone_number != 'your_twilio_phone_number',
+            'account_sid_preview': account_sid[:8] + '...' if account_sid and len(account_sid) > 8 else 'NOT_SET',
+            'phone_number_preview': phone_number if phone_number else 'NOT_SET'
+        }
+        
+        all_configured = all([
+            config_status['account_sid_configured'],
+            config_status['auth_token_configured'],
+            config_status['phone_number_configured']
+        ])
+        
+        return JsonResponse({
+            'status': 'success',
+            'twilio_configured': all_configured,
+            'config_details': config_status,
+            'message': 'Todas as credenciais configuradas' if all_configured else 'Credenciais Twilio não configuradas corretamente'
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)

@@ -44,6 +44,9 @@ urlpatterns = [
     # Phone formatting test endpoint
     path('test-phone-formatting/', views.test_phone_formatting, name='test-phone-formatting'),
     
+    # Twilio configuration check endpoint
+    path('twilio-config-check/', views.twilio_config_check, name='twilio-config-check'),
+    
     # GhostPay endpoints
     path('ghostpay/', views.GhostPayWebhookView.as_view(), name='ghostpay-webhook'),
     path('ghostpay-test/', views.ghostpay_test_format, name='ghostpay-test'),
