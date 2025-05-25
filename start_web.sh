@@ -17,17 +17,16 @@ python manage.py check --deploy
 
 echo "🚀 Iniciando Gunicorn..."
 
-# Iniciar Gunicorn com configurações otimizadas
+# Iniciar Gunicorn com configurações otimizadas para produção
 exec gunicorn \
     --bind 0.0.0.0:8000 \
     --workers 3 \
     --worker-class sync \
     --timeout 120 \
-    --keepalive 5 \
+    --keep-alive 5 \
     --max-requests 1000 \
     --max-requests-jitter 100 \
     --access-logfile - \
     --error-logfile - \
     --log-level info \
-    --capture-output \
     sms_sender.wsgi:application
