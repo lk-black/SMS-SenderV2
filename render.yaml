@@ -1,0 +1,45 @@
+version: "0.1"
+build:
+  commands:
+    - pip install -r requirements.txt
+    - python manage.py collectstatic --noinput
+    - python manage.py migrate
+
+services:
+  - type: web
+    name: sms-sender-web
+    env: python
+    plan: free
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn sms_sender.wsgi:application"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: DEBUG
+        value: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        value: "*.onrender.com"
+
+  - type: worker
+    name: sms-sender-worker
+    env: python
+    plan: free
+    buildCommand: "./build.sh"
+    startCommand: "celery -A sms_sender worker --loglevel=info"
+
+  - type: worker
+    name: sms-sender-beat
+    env: python
+    plan: free
+    buildCommand: "./build.sh"
+    startCommand: "celery -A sms_sender beat --loglevel=info"
+
+databases:
+  - name: sms-sender-db
+    plan: free
+
+redis:
+  - name: sms-sender-redis
+    plan: free

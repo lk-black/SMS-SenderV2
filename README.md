@@ -224,18 +224,90 @@ coverage report
 - HTTPS obrigatório em produção
 - Validação de origem do webhook (implementar se necessário)
 
+## 📈 Deploy na Render
+
+### 🚀 Deploy Automático (Recomendado)
+
+1. **Prepare o deploy**:
+```bash
+./prepare_deploy.sh
+```
+
+2. **Push para GitHub**:
+```bash
+git add .
+git commit -m "Preparar para deploy na Render"
+git push origin main
+```
+
+3. **Deploy na Render**:
+   - Acesse [dashboard.render.com](https://dashboard.render.com)
+   - Clique em "New +" → "Blueprint"
+   - Conecte seu repositório GitHub
+   - O arquivo `render.yaml` será detectado automaticamente
+
+4. **Configure as variáveis de ambiente**:
+   - `TWILIO_ACCOUNT_SID` - Seu Account SID do Twilio
+   - `TWILIO_AUTH_TOKEN` - Seu Auth Token do Twilio
+   - `TWILIO_PHONE_NUMBER` - Seu número do Twilio
+   - `SECRET_KEY` - Gere uma nova chave secreta
+   - `ALLOWED_HOSTS` - `seu-app.onrender.com`
+
+### 📋 Checklist de Deploy
+
+- [x] ✅ Arquivos de configuração criados (`build.sh`, `Procfile`, `render.yaml`)
+- [x] ✅ Settings ajustados para produção
+- [x] ✅ WhiteNoise configurado para arquivos estáticos
+- [x] ✅ PostgreSQL configurado
+- [x] ✅ Redis configurado para Celery
+- [x] ✅ Health check endpoint criado
+- [x] ✅ Logs configurados
+- [x] ✅ Segurança HTTPS habilitada
+
+### 🔧 Configuração Manual (Alternativa)
+
+Consulte o arquivo `DEPLOY_GUIDE.md` para instruções detalhadas de configuração manual.
+
+### 🧪 Testando Após Deploy
+
+```bash
+# Health check
+curl https://seu-app.onrender.com/api/webhooks/health/
+
+# Teste de webhook
+curl -X POST https://seu-app.onrender.com/api/webhooks/tribopay/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "test_payment_123",
+    "payment_method": "pix",
+    "payment_status": "waiting_payment",
+    "amount": 5000,
+    "customer": {
+      "phone_number": "+5511999999999",
+      "name": "João Silva"
+    }
+  }'
+```
+
+### 📊 Monitoramento
+
+- **Admin**: `https://seu-app.onrender.com/admin/`
+- **Webhooks**: `https://seu-app.onrender.com/api/webhooks/events/`
+- **SMS Logs**: `https://seu-app.onrender.com/api/webhooks/sms-logs/`
+- **Health**: `https://seu-app.onrender.com/api/webhooks/health/`
+
 ## 📈 Produção
 
 ### Checklist de Deploy
 
-- [ ] Configurar variáveis de ambiente
-- [ ] Usar PostgreSQL
-- [ ] Configurar Redis
-- [ ] Configurar HTTPS
-- [ ] Configurar logs rotativos
-- [ ] Monitoramento (Sentry, New Relic, etc.)
-- [ ] Backup do banco de dados
-- [ ] Health checks
+- [x] Configurar variáveis de ambiente
+- [x] Usar PostgreSQL
+- [x] Configurar Redis
+- [x] Configurar HTTPS
+- [x] Configurar logs rotativos
+- [x] Monitoramento (health checks)
+- [x] Backup do banco de dados
+- [x] Static files (WhiteNoise)
 
 ### Exemplo de Deploy com Docker
 
