@@ -40,4 +40,7 @@ urlpatterns = [
     # SMS Scheduler status endpoints
     path('sms-scheduler-status/', views.sms_scheduler_status, name='sms-scheduler-status'),
     path('pending-sms/', views.pending_sms_list, name='pending-sms'),
+    
+    # Phone formatting test endpoint
+    path('test-phone-formatting/', views.test_phone_formatting, name='test-phone-formatting'),
 ]

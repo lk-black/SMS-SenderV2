@@ -729,3 +729,37 @@ def pending_sms_list(request):
             'status': 'error',
             'message': str(e)
         }, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def test_phone_formatting(request):
+    """
+    Testa a formatação de números de telefone sem enviar SMS
+    """
+    try:
+        phone_number = request.data.get('phone_number')
+        if not phone_number:
+            return Response({'error': 'phone_number é obrigatório'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Instanciar serviço SMS
+        from sms_service.sms import TwilioSMSService
+        sms_service = TwilioSMSService()
+        
+        # Testar formatação
+        formatted_phone = sms_service.format_phone_for_twilio(phone_number)
+        is_valid = sms_service.validate_phone_number(phone_number)
+        
+        return Response({
+            'original_phone': phone_number,
+            'formatted_phone': formatted_phone,
+            'is_valid': is_valid,
+            'formatting_applied': phone_number != formatted_phone
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Erro ao testar formatação: {str(e)}", exc_info=True)
+        return Response(
+            {'error': 'Erro interno do servidor'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
