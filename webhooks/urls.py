@@ -59,4 +59,8 @@ urlpatterns = [
     
     # Worker diagnosis endpoint
     path('worker-diagnosis/', views.worker_diagnosis, name='worker-diagnosis'),
+    
+    # Manual task processing endpoints (workaround for worker issues)
+    path('force-process-pending-tasks/', views.force_process_pending_tasks, name='force-process-pending-tasks'),
+    path('check-pending-sms/', views.check_pending_sms, name='check-pending-sms'),
 ]

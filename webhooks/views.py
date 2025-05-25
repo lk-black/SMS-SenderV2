@@ -1566,3 +1566,237 @@ def generate_recommendations(diagnosis_result):
         recommendations.append("✅ Todos os componentes parecem estar funcionando corretamente")
     
     return recommendations
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def force_process_pending_tasks(request):
+    """
+    Endpoint para processar manualmente tasks pendentes do Celery
+    Workaround para quando o worker não está processando automaticamente
+    """
+    from decouple import config
+    import redis
+    from sms_sender.celery import app
+    
+    try:
+        # Verificar conexão com Redis
+        redis_url = config('REDIS_URL', default='redis://localhost:6379/0')
+        r = redis.from_url(redis_url)
+        r.ping()
+        
+        # Verificar quantas tasks estão na fila
+        queue_length = r.llen('celery')
+        
+        if queue_length == 0:
+            return Response({
+                'status': 'success',
+                'message': 'Nenhuma task pendente para processar',
+                'tasks_processed': 0,
+                'queue_length': queue_length
+            })
+        
+        processed_tasks = []
+        errors = []
+        
+        # Processar até 50 tasks por vez para evitar timeout
+        max_tasks = min(50, queue_length)
+        
+        for i in range(max_tasks):
+            try:
+                # Buscar próxima task da fila
+                task_data = r.lpop('celery')
+                if not task_data:
+                    break
+                
+                import json
+                task_info = json.loads(task_data)
+                task_id = task_info.get('id')
+                task_name = task_info.get('task')
+                
+                # Executar a task manualmente baseado no tipo
+                if task_name == 'webhooks.tasks.schedule_sms_recovery':
+                    try:
+                        webhook_id = task_info['args'][0] if task_info.get('args') else None
+                        if webhook_id:
+                            from webhooks.tasks import schedule_sms_recovery
+                            result = schedule_sms_recovery(webhook_id)
+                            processed_tasks.append({
+                                'task_id': task_id,
+                                'task_name': task_name,
+                                'webhook_id': webhook_id,
+                                'result': str(result),
+                                'status': 'success'
+                            })
+                        else:
+                            errors.append(f"Task {task_id}: webhook_id não encontrado")
+                    except Exception as e:
+                        errors.append(f"Task {task_id}: {str(e)}")
+                
+                elif task_name == 'webhooks.tasks.check_payment_status':
+                    try:
+                        webhook_id = task_info['args'][0] if task_info.get('args') else None
+                        if webhook_id:
+                            from webhooks.tasks import check_payment_status
+                            result = check_payment_status(webhook_id)
+                            processed_tasks.append({
+                                'task_id': task_id,
+                                'task_name': task_name,
+                                'webhook_id': webhook_id,
+                                'result': str(result),
+                                'status': 'success'
+                            })
+                        else:
+                            errors.append(f"Task {task_id}: webhook_id não encontrado")
+                    except Exception as e:
+                        errors.append(f"Task {task_id}: {str(e)}")
+                
+                elif task_name == 'webhooks.tasks.update_payment_status':
+                    try:
+                        webhook_id = task_info['args'][0] if task_info.get('args') else None
+                        if webhook_id:
+                            from webhooks.tasks import update_payment_status
+                            result = update_payment_status(webhook_id)
+                            processed_tasks.append({
+                                'task_id': task_id,
+                                'task_name': task_name,
+                                'webhook_id': webhook_id,
+                                'result': str(result),
+                                'status': 'success'
+                            })
+                        else:
+                            errors.append(f"Task {task_id}: webhook_id não encontrado")
+                    except Exception as e:
+                        errors.append(f"Task {task_id}: {str(e)}")
+                
+                elif task_name == 'webhooks.tasks.test_task_connection':
+                    try:
+                        message = task_info['args'][0] if task_info.get('args') else "Manual processing test"
+                        from webhooks.tasks import test_task_connection
+                        result = test_task_connection(message)
+                        processed_tasks.append({
+                            'task_id': task_id,
+                            'task_name': task_name,
+                            'message': message,
+                            'result': str(result),
+                            'status': 'success'
+                        })
+                    except Exception as e:
+                        errors.append(f"Task {task_id}: {str(e)}")
+                
+                else:
+                    # Task desconhecida, colocar de volta na fila
+                    r.rpush('celery', task_data)
+                    errors.append(f"Task {task_id}: tipo desconhecido '{task_name}', recolocada na fila")
+                
+            except json.JSONDecodeError as e:
+                errors.append(f"Erro ao decodificar task: {str(e)}")
+            except Exception as e:
+                errors.append(f"Erro genérico ao processar task: {str(e)}")
+        
+        # Verificar quantas tasks restam na fila
+        remaining_queue_length = r.llen('celery')
+        
+        return Response({
+            'status': 'success',
+            'message': f'Processamento manual concluído',
+            'tasks_processed': len(processed_tasks),
+            'initial_queue_length': queue_length,
+            'remaining_queue_length': remaining_queue_length,
+            'errors_count': len(errors),
+            'processed_tasks': processed_tasks,
+            'errors': errors[:10] if errors else []  # Limitar erros mostrados
+        })
+        
+    except redis.RedisError as e:
+        return Response({
+            'status': 'error',
+            'message': f'Erro de conexão com Redis: {str(e)}'
+        }, status=500)
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Erro durante processamento manual: {str(e)}'
+        }, status=500)
+
+
+@csrf_exempt
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def check_pending_sms(request):
+    """
+    Endpoint para verificar webhooks que precisam de SMS de recuperação
+    """
+    try:
+        # Buscar webhooks PIX aguardando pagamento que ainda não tiveram SMS enviado
+        pending_webhooks = WebhookEvent.objects.filter(
+            payment_method='PIX',
+            payment_status='waiting_payment',
+            sms_scheduled=False,
+            processed=True
+        ).order_by('-created_at')[:20]
+        
+        # Buscar webhooks com SMS agendado mas não enviado
+        scheduled_not_sent = WebhookEvent.objects.filter(
+            payment_method='PIX',
+            payment_status='waiting_payment',
+            sms_scheduled=True
+        ).exclude(
+            smslog__status='sent'
+        ).order_by('-created_at')[:20]
+        
+        # Verificar fila do Celery
+        from decouple import config
+        import redis
+        
+        redis_url = config('REDIS_URL', default='redis://localhost:6379/0')
+        r = redis.from_url(redis_url)
+        queue_length = r.llen('celery')
+        
+        pending_data = []
+        for webhook in pending_webhooks:
+            pending_data.append({
+                'webhook_id': webhook.id,
+                'payment_id': webhook.payment_id,
+                'customer_phone': webhook.customer_phone,
+                'payment_amount': float(webhook.payment_amount),
+                'created_at': webhook.created_at.isoformat(),
+                'sms_scheduled': webhook.sms_scheduled,
+                'needs_sms': True
+            })
+        
+        scheduled_data = []
+        for webhook in scheduled_not_sent:
+            last_sms = webhook.smslog_set.order_by('-created_at').first()
+            scheduled_data.append({
+                'webhook_id': webhook.id,
+                'payment_id': webhook.payment_id,
+                'customer_phone': webhook.customer_phone,
+                'payment_amount': float(webhook.payment_amount),
+                'created_at': webhook.created_at.isoformat(),
+                'sms_scheduled': webhook.sms_scheduled,
+                'last_sms_status': last_sms.status if last_sms else None,
+                'last_sms_at': last_sms.created_at.isoformat() if last_sms else None,
+                'needs_retry': True
+            })
+        
+        return Response({
+            'status': 'success',
+            'celery_queue_length': queue_length,
+            'pending_sms_count': len(pending_data),
+            'scheduled_not_sent_count': len(scheduled_data),
+            'pending_webhooks': pending_data,
+            'scheduled_not_sent': scheduled_data,
+            'summary': {
+                'total_needing_attention': len(pending_data) + len(scheduled_data),
+                'queue_has_tasks': queue_length > 0,
+                'action_needed': len(pending_data) > 0 or len(scheduled_data) > 0
+            }
+        })
+        
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Erro ao verificar SMS pendentes: {str(e)}'
+        }, status=500)
