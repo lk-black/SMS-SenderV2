@@ -55,12 +55,17 @@ def tribopay_webhook(request):
             # Se for PIX aguardando pagamento, agendar SMS de recuperação
             if webhook_event.is_pix_waiting_payment():
                 logger.info(f"Agendando SMS de recuperação para webhook {webhook_event.id}")
-                schedule_sms_recovery.apply_async(
-                    args=[webhook_event.id],
-                    countdown=600  # 10 minutos em segundos
-                )
-                webhook_event.sms_scheduled = True
-                webhook_event.save()
+                try:
+                    schedule_sms_recovery.apply_async(
+                        args=[webhook_event.id],
+                        countdown=600  # 10 minutos em segundos
+                    )
+                    webhook_event.sms_scheduled = True
+                    webhook_event.save()
+                    logger.info(f"SMS agendado com sucesso para webhook {webhook_event.id}")
+                except Exception as e:
+                    logger.warning(f"Falha ao agendar SMS (Redis não conectado): {str(e)}. Webhook salvo sem agendamento.")
+                    # Continua sem marcar sms_scheduled = True
         else:
             logger.info(f"Webhook duplicado ignorado: {webhook_event}")
         
@@ -235,12 +240,17 @@ class TribopayWebhookView(generics.GenericAPIView):
                 # Se for PIX aguardando pagamento, agendar SMS de recuperação
                 if webhook_event.is_pix_waiting_payment():
                     logger.info(f"Agendando SMS de recuperação para webhook {webhook_event.id}")
-                    schedule_sms_recovery.apply_async(
-                        args=[webhook_event.id],
-                        countdown=600  # 10 minutos em segundos
-                    )
-                    webhook_event.sms_scheduled = True
-                    webhook_event.save()
+                    try:
+                        schedule_sms_recovery.apply_async(
+                            args=[webhook_event.id],
+                            countdown=600  # 10 minutos em segundos
+                        )
+                        webhook_event.sms_scheduled = True
+                        webhook_event.save()
+                        logger.info(f"SMS agendado com sucesso para webhook {webhook_event.id}")
+                    except Exception as e:
+                        logger.warning(f"Falha ao agendar SMS (Redis não conectado): {str(e)}. Webhook salvo sem agendamento.")
+                        # Continua sem marcar sms_scheduled = True
             else:
                 logger.info(f"Webhook duplicado ignorado: {webhook_event}")
             
