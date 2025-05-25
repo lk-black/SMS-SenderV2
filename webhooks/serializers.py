@@ -28,7 +28,8 @@ class TribePayRealWebhookSerializer(serializers.Serializer):
     status = serializers.CharField(max_length=50)
     method = serializers.CharField(max_length=20)
     created_at = serializers.DateTimeField(required=False)
-    paid_at = serializers.DateTimeField(required=False)
+    paid_at = serializers.DateTimeField(required=False, allow_null=True)
+    refund_at = serializers.DateTimeField(required=False, allow_null=True)
     platform = serializers.CharField(required=False)
     
     # Dados do cliente
@@ -36,6 +37,15 @@ class TribePayRealWebhookSerializer(serializers.Serializer):
     
     # Dados da transação
     transaction = serializers.DictField()
+    
+    # Campos adicionais opcionais
+    affiliate = serializers.DictField(required=False)
+    offer = serializers.DictField(required=False)
+    items = serializers.ListField(required=False)
+    tracking = serializers.DictField(required=False)
+    ip = serializers.CharField(required=False, allow_null=True)
+    fbp = serializers.CharField(required=False, allow_null=True)
+    fbc = serializers.CharField(required=False, allow_null=True)
     
     def validate_customer(self, value):
         """Valida se os dados do cliente contêm telefone"""
