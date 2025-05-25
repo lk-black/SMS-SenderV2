@@ -36,4 +36,8 @@ urlpatterns = [
     
     # TriboPay test format endpoint (no database)
     path('tribopay-test/', views.tribopay_test_format, name='tribopay-test'),
+    
+    # SMS Scheduler status endpoints
+    path('sms-scheduler-status/', views.sms_scheduler_status, name='sms-scheduler-status'),
+    path('pending-sms/', views.pending_sms_list, name='pending-sms'),
 ]

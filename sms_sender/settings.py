@@ -169,14 +169,57 @@ TWILIO_ACCOUNT_SID = config('TWILIO_ACCOUNT_SID', default='your_twilio_account_s
 TWILIO_AUTH_TOKEN = config('TWILIO_AUTH_TOKEN', default='your_twilio_auth_token')
 TWILIO_PHONE_NUMBER = config('TWILIO_PHONE_NUMBER', default='your_twilio_phone_number')
 
-# Celery Configuration
+# Redis and Celery Configuration with Fallback
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+
+# Celery Configuration
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+
+# Celery Error Handling
+CELERY_TASK_ALWAYS_EAGER = config('CELERY_TASK_ALWAYS_EAGER', default=False, cast=bool)
+CELERY_EAGER_PROPAGATES_EXCEPTIONS = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_DISABLE_RATE_LIMITS = True
+
+# Redis Cache Configuration with fallback to dummy cache
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+        'OPTIONS': {
+            'CONNECTION_POOL_KWARGS': {
+                'socket_connect_timeout': 5,
+                'socket_timeout': 5,
+                'retry_on_timeout': True,
+                'health_check_interval': 30,
+            }
+        },
+        'TIMEOUT': 300,
+        'KEY_PREFIX': 'sms_sender',
+    }
+}
+
+# Fallback para cache local se Redis não estiver disponível
+try:
+    from django.core.cache import cache
+    cache.set('test', 'test', 1)
+    cache.get('test')
+except Exception:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'sms-sender-cache',
+        }
+    }
+
+# SMS Recovery Configuration
+SMS_RECOVERY_DELAY_MINUTES = config('SMS_RECOVERY_DELAY_MINUTES', default=10, cast=int)
+SMS_RECOVERY_ENABLED = config('SMS_RECOVERY_ENABLED', default=True, cast=bool)
 
 # Security Settings for Production
 if not DEBUG:

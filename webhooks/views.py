@@ -55,16 +55,19 @@ def tribopay_webhook(request):
             # Se for PIX aguardando pagamento, agendar SMS de recuperação
             if webhook_event.is_pix_waiting_payment():
                 logger.info(f"Agendando SMS de recuperação para webhook {webhook_event.id}")
-                try:
-                    schedule_sms_recovery.apply_async(
-                        args=[webhook_event.id],
-                        countdown=600  # 10 minutos em segundos
-                    )
+                
+                # Usar o novo SMSSchedulerService com fallback automático
+                from .sms_scheduler import SMSSchedulerService
+                scheduler = SMSSchedulerService()
+                
+                success, message = scheduler.schedule_sms_recovery(webhook_event.id)
+                
+                if success:
                     webhook_event.sms_scheduled = True
                     webhook_event.save()
-                    logger.info(f"SMS agendado com sucesso para webhook {webhook_event.id}")
-                except Exception as e:
-                    logger.warning(f"Falha ao agendar SMS (Redis não conectado): {str(e)}. Webhook salvo sem agendamento.")
+                    logger.info(f"SMS agendado com sucesso para webhook {webhook_event.id}: {message}")
+                else:
+                    logger.warning(f"Falha ao agendar SMS para webhook {webhook_event.id}: {message}")
                     # Continua sem marcar sms_scheduled = True
         else:
             logger.info(f"Webhook duplicado ignorado: {webhook_event}")
@@ -556,6 +559,23 @@ def tribopay_flexible(request):
                 
                 if created:
                     logger.info(f"Webhook flexível criado: {webhook_event.id}")
+                    
+                    # Se for PIX aguardando pagamento, agendar SMS de recuperação
+                    if payment_method == 'pix' and payment_status in ['waiting', 'waiting_payment', 'pending']:
+                        logger.info(f"Agendando SMS de recuperação para webhook flexível {webhook_event.id}")
+                        
+                        # Usar o novo SMSSchedulerService com fallback automático
+                        from .sms_scheduler import SMSSchedulerService
+                        scheduler = SMSSchedulerService()
+                        
+                        success, message = scheduler.schedule_sms_recovery(webhook_event.id)
+                        
+                        if success:
+                            webhook_event.sms_scheduled = True
+                            webhook_event.save()
+                            logger.info(f"SMS agendado com sucesso para webhook flexível {webhook_event.id}: {message}")
+                        else:
+                            logger.warning(f"Falha ao agendar SMS para webhook flexível {webhook_event.id}: {message}")
                 else:
                     logger.info(f"Webhook flexível já existia: {webhook_event.id}")
                 
@@ -624,6 +644,56 @@ def tribopay_test_format(request):
             
     except Exception as e:
         logger.error(f"Erro no teste de formato: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def sms_scheduler_status(request):
+    """
+    Endpoint para verificar status do SMS Scheduler Service
+    """
+    try:
+        from .sms_scheduler import SMSSchedulerService
+        scheduler = SMSSchedulerService()
+        status_info = scheduler.get_status()
+        
+        return JsonResponse({
+            'status': 'success',
+            'scheduler_status': status_info,
+            'message': 'Fallback mode' if status_info['fallback_mode'] else 'Full functionality'
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro ao verificar status do scheduler: {e}")
+        return JsonResponse({
+            'status': 'error', 
+            'message': str(e)
+        }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def pending_sms_list(request):
+    """
+    Endpoint para listar SMS pendentes para processamento manual
+    """
+    try:
+        from .sms_scheduler import SMSSchedulerService
+        scheduler = SMSSchedulerService()
+        pending_sms = scheduler.get_pending_sms()
+        
+        return JsonResponse({
+            'status': 'success',
+            'count': len(pending_sms),
+            'pending_sms': pending_sms
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro ao buscar SMS pendentes: {e}")
         return JsonResponse({
             'status': 'error',
             'message': str(e)
