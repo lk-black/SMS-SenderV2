@@ -172,7 +172,7 @@ TWILIO_PHONE_NUMBER = config('TWILIO_PHONE_NUMBER', default='your_twilio_phone_n
 # Redis and Celery Configuration with Fallback
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
-# Celery Configuration
+# Configuração do Celery com melhor tratamento de erros
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
@@ -180,42 +180,52 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
-# Celery Error Handling
+# Configurações de resiliência do Celery
 CELERY_TASK_ALWAYS_EAGER = config('CELERY_TASK_ALWAYS_EAGER', default=False, cast=bool)
 CELERY_EAGER_PROPAGATES_EXCEPTIONS = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_WORKER_DISABLE_RATE_LIMITS = True
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_RETRY = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = 3
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
-# Redis Cache Configuration with fallback to dummy cache
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': REDIS_URL,
-        'OPTIONS': {
-            'CONNECTION_POOL_KWARGS': {
-                'socket_connect_timeout': 5,
-                'socket_timeout': 5,
-                'retry_on_timeout': True,
-                'health_check_interval': 30,
+# Configuração do Cache Redis com fallback robusto
+def configure_cache():
+    """Configura o cache com fallback automático"""
+    try:
+        # Verificar se REDIS_URL está disponível e é válido
+        if REDIS_URL and 'redis://' in REDIS_URL:
+            return {
+                'default': {
+                    'BACKEND': 'django_redis.cache.RedisCache',
+                    'LOCATION': REDIS_URL,
+                    'OPTIONS': {
+                        'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                        'CONNECTION_POOL_KWARGS': {
+                            'max_connections': 50,
+                            'retry_on_timeout': True,
+                        },
+                        'IGNORE_EXCEPTIONS': True,
+                    },
+                    'TIMEOUT': 300,
+                    'KEY_PREFIX': 'sms_sender',
+                }
             }
-        },
-        'TIMEOUT': 300,
-        'KEY_PREFIX': 'sms_sender',
-    }
-}
-
-# Fallback para cache local se Redis não estiver disponível
-try:
-    from django.core.cache import cache
-    cache.set('test', 'test', 1)
-    cache.get('test')
-except Exception:
-    CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': 'sms-sender-cache',
+        else:
+            raise Exception("Redis URL not available")
+    except Exception:
+        # Fallback para cache local
+        return {
+            'default': {
+                'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+                'LOCATION': 'sms-sender-cache',
+                'TIMEOUT': 300,
+            }
         }
-    }
+
+CACHES = configure_cache()
 
 # SMS Recovery Configuration
 SMS_RECOVERY_DELAY_MINUTES = config('SMS_RECOVERY_DELAY_MINUTES', default=10, cast=int)

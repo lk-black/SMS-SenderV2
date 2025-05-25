@@ -1,5 +1,8 @@
 import logging
+import json
+import hashlib
 from django.http import HttpResponse, JsonResponse
+from django.utils import timezone
 from rest_framework import status, generics
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -335,27 +338,55 @@ def health_check(request):
     """
     Endpoint de health check para monitoramento
     """
+    health_status = {
+        'status': 'healthy',
+        'service': 'SMS Sender',
+        'timestamp': timezone.now().isoformat(),
+    }
+    
+    # Verificar conexão com banco
     try:
-        # Verificar conexão com banco
         from django.db import connection
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
-        
-        # Verificar Redis/Celery
+        health_status['database'] = 'connected'
+    except Exception as e:
+        health_status['database'] = f'error: {str(e)}'
+        health_status['status'] = 'unhealthy'
+    
+    # Verificar Redis/Cache
+    try:
         from django.core.cache import cache
         cache.set('health_check', 'ok', 10)
-        
-        return JsonResponse({
-            'status': 'healthy',
-            'service': 'SMS Sender',
-            'database': 'connected',
-            'cache': 'connected'
-        })
+        result = cache.get('health_check')
+        if result == 'ok':
+            health_status['cache'] = 'connected'
+            health_status['cache_backend'] = cache.__class__.__name__
+        else:
+            health_status['cache'] = 'warning: test failed'
     except Exception as e:
-        return JsonResponse({
-            'status': 'unhealthy',
-            'error': str(e)
-        }, status=500)
+        health_status['cache'] = f'error: {str(e)}'
+        health_status['status'] = 'degraded'
+    
+    # Verificar configuração do Redis
+    from django.conf import settings
+    health_status['redis_url_configured'] = bool(getattr(settings, 'REDIS_URL', None))
+    health_status['cache_backend_type'] = settings.CACHES['default']['BACKEND']
+    
+    # Verificar SMS Scheduler
+    try:
+        from .sms_scheduler import SMSSchedulerService
+        scheduler = SMSSchedulerService()
+        scheduler_status = {
+            'redis_available': scheduler.redis_available,
+            'celery_available': scheduler.celery_available,
+        }
+        health_status['sms_scheduler'] = scheduler_status
+    except Exception as e:
+        health_status['sms_scheduler'] = f'error: {str(e)}'
+    
+    status_code = 200 if health_status['status'] == 'healthy' else 500
+    return JsonResponse(health_status, status=status_code)
 
 
 @csrf_exempt
