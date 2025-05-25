@@ -11,7 +11,7 @@ services:
     env: python
     plan: starter
     buildCommand: "./build.sh"
-    startCommand: "./start_web.sh"
+    startCommand: "./start_render.sh"
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
@@ -25,13 +25,15 @@ services:
         value: "sms_sender.settings"
       - key: WEB_CONCURRENCY
         value: 3
+      - key: SERVICE_TYPE
+        value: "web"
 
   - type: worker
     name: sms-sender-worker
     env: python
     plan: starter
     buildCommand: "./build.sh"
-    startCommand: "./start_celery_worker.sh"
+    startCommand: "./start_render.sh"
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
@@ -45,13 +47,15 @@ services:
         value: true
       - key: CELERY_TASK_ALWAYS_EAGER
         value: false
+      - key: SERVICE_TYPE
+        value: "worker"
 
   - type: worker
     name: sms-sender-beat
     env: python
     plan: starter
     buildCommand: "./build.sh"
-    startCommand: "./start_celery_beat.sh"
+    startCommand: "./start_render.sh"
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
@@ -63,6 +67,8 @@ services:
         value: "sms_sender.settings"
       - key: C_FORCE_ROOT
         value: true
+      - key: SERVICE_TYPE
+        value: "beat"
 
 databases:
   - name: sms-sender-db
