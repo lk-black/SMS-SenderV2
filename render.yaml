@@ -27,7 +27,10 @@ services:
     env: python
     plan: starter
     buildCommand: "./build.sh"
-    startCommand: "celery -A sms_sender worker --loglevel=info --pool=solo --concurrency=1"
+    startCommand: "python -m celery -A sms_sender worker --loglevel=info --pool=solo"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
 
   - type: worker
     name: sms-sender-beat

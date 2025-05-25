@@ -56,4 +56,7 @@ urlpatterns = [
     path('test-celery-task/', views.test_celery_task, name='test-celery-task'),
     path('force-process-pending-sms/', views.force_process_pending_sms, name='force-process-pending-sms'),
     path('test-immediate-sms/', views.test_immediate_sms, name='test-immediate-sms'),
+    
+    # Worker diagnosis endpoint
+    path('worker-diagnosis/', views.worker_diagnosis, name='worker-diagnosis'),
 ]

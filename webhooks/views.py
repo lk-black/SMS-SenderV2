@@ -10,6 +10,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+from celery import inspect
+import redis
 
 from .models import WebhookEvent, SMSLog
 from .serializers import (
@@ -1383,3 +1385,181 @@ def test_immediate_sms(request):
             'status': 'error',
             'message': f'Erro: {str(e)}'
         }, status=500)
+
+
+@api_view(['GET'])
+def worker_diagnosis(request):
+    """
+    Endpoint para diagnosticar problemas do worker Celery
+    """
+    try:
+        diagnosis_result = {
+            'timestamp': timezone.now().isoformat(),
+            'redis_connection': None,
+            'celery_config': None,
+            'worker_inspection': None,
+            'task_creation': None,
+            'redis_queue_info': None
+        }
+        
+        # 1. Teste de conexão Redis
+        try:
+            redis_url = config('REDIS_URL', default='redis://localhost:6379/0')
+            r = redis.from_url(redis_url)
+            r.ping()
+            
+            # Teste set/get
+            r.set('diagnosis_test', 'working', ex=10)
+            test_value = r.get('diagnosis_test')
+            
+            diagnosis_result['redis_connection'] = {
+                'status': 'connected',
+                'ping': True,
+                'set_get_test': test_value.decode() if test_value else None,
+                'redis_url_masked': redis_url[:20] + "..." if len(redis_url) > 20 else redis_url
+            }
+        except Exception as e:
+            diagnosis_result['redis_connection'] = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # 2. Configuração do Celery
+        try:
+            from sms_sender.celery import app
+            
+            diagnosis_result['celery_config'] = {
+                'app_name': app.main,
+                'broker_url_masked': str(app.conf.broker_url)[:20] + "..." if len(str(app.conf.broker_url)) > 20 else str(app.conf.broker_url),
+                'result_backend_masked': str(app.conf.result_backend)[:20] + "..." if len(str(app.conf.result_backend)) > 20 else str(app.conf.result_backend),
+                'task_serializer': app.conf.task_serializer,
+                'registered_tasks': [task for task in app.tasks.keys() if not task.startswith('celery.')]
+            }
+        except Exception as e:
+            diagnosis_result['celery_config'] = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # 3. Inspeção do Worker
+        try:
+            from sms_sender.celery import app
+            i = inspect.Inspect(app=app)
+            
+            # Usar timeout para evitar travamento
+            active_workers = i.active()
+            stats = i.stats()
+            registered = i.registered()
+            
+            diagnosis_result['worker_inspection'] = {
+                'active_workers': active_workers,
+                'worker_stats': stats,
+                'registered_tasks': registered,
+                'workers_online': len(active_workers) if active_workers else 0
+            }
+        except Exception as e:
+            diagnosis_result['worker_inspection'] = {
+                'status': 'error',
+                'error': str(e),
+                'workers_online': 0
+            }
+        
+        # 4. Teste de criação de task
+        try:
+            from webhooks.tasks import debug_task
+            
+            result = debug_task.delay("Diagnosis test")
+            
+            diagnosis_result['task_creation'] = {
+                'task_id': result.id,
+                'task_state': result.state,
+                'status': 'success'
+            }
+        except Exception as e:
+            diagnosis_result['task_creation'] = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # 5. Informações da fila Redis
+        try:
+            redis_url = config('REDIS_URL', default='redis://localhost:6379/0')
+            r = redis.from_url(redis_url)
+            
+            # Verificar filas do Celery
+            celery_queue_length = r.llen('celery')
+            
+            # Verificar chaves relacionadas ao Celery
+            celery_keys = r.keys('celery*')
+            
+            diagnosis_result['redis_queue_info'] = {
+                'celery_queue_length': celery_queue_length,
+                'celery_related_keys': [key.decode() for key in celery_keys],
+                'total_keys_count': len(celery_keys)
+            }
+        except Exception as e:
+            diagnosis_result['redis_queue_info'] = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # Determinar status geral
+        redis_ok = diagnosis_result['redis_connection'] and diagnosis_result['redis_connection'].get('status') == 'connected'
+        celery_ok = diagnosis_result['celery_config'] and 'error' not in diagnosis_result['celery_config']
+        workers_online = diagnosis_result['worker_inspection'] and diagnosis_result['worker_inspection'].get('workers_online', 0) > 0
+        
+        overall_status = 'healthy' if redis_ok and celery_ok and workers_online else 'unhealthy'
+        
+        if not workers_online:
+            overall_status = 'worker_offline'
+        elif not redis_ok:
+            overall_status = 'redis_error'
+        elif not celery_ok:
+            overall_status = 'celery_config_error'
+        
+        return Response({
+            'status': overall_status,
+            'diagnosis': diagnosis_result,
+            'recommendations': generate_recommendations(diagnosis_result)
+        })
+        
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Erro durante diagnóstico: {str(e)}',
+            'diagnosis': None
+        }, status=500)
+
+def generate_recommendations(diagnosis_result):
+    """Gera recomendações baseadas no diagnóstico"""
+    recommendations = []
+    
+    # Verificar Redis
+    redis_status = diagnosis_result.get('redis_connection', {}).get('status')
+    if redis_status != 'connected':
+        recommendations.append("❌ Redis não está conectado - verificar REDIS_URL e status do serviço Redis")
+    
+    # Verificar Workers
+    workers_online = diagnosis_result.get('worker_inspection', {}).get('workers_online', 0)
+    if workers_online == 0:
+        recommendations.extend([
+            "❌ Nenhum worker Celery online",
+            "📋 Verificar logs do worker no Render dashboard",
+            "🔄 Verificar se o comando de start do worker está correto",
+            "⚙️ Verificar se o worker service está rodando no Render"
+        ])
+    
+    # Verificar tasks na fila
+    queue_length = diagnosis_result.get('redis_queue_info', {}).get('celery_queue_length', 0)
+    if queue_length > 0 and workers_online == 0:
+        recommendations.append(f"⚠️ {queue_length} tasks na fila mas nenhum worker para processar")
+    
+    # Verificar configuração
+    celery_config = diagnosis_result.get('celery_config')
+    if celery_config and 'error' in celery_config:
+        recommendations.append("❌ Erro na configuração do Celery - verificar imports e settings")
+    
+    if not recommendations:
+        recommendations.append("✅ Todos os componentes parecem estar funcionando corretamente")
+    
+    return recommendations
