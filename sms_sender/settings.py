@@ -28,7 +28,11 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-(w%l3tlx&^ag6u1b^tp*n
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',')
+# ALLOWED_HOSTS configuration
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,sms-senderv2.onrender.com,*.onrender.com').split(',')
+
+# Clean up any empty strings from the list
+ALLOWED_HOSTS = [host.strip() for host in ALLOWED_HOSTS if host.strip()]
 
 
 # Application definition

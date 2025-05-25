@@ -313,6 +313,7 @@ class TestSMSView(generics.GenericAPIView):
             )
 
 
+@csrf_exempt
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def health_check(request):
