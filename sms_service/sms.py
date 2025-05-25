@@ -6,6 +6,13 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
+# Importar utilitários de logging estruturado
+try:
+    from webhooks.logging_utils import sms_structured_logger
+except ImportError:
+    # Fallback se não conseguir importar
+    sms_structured_logger = None
+
 
 class TwilioSMSService:
     """
@@ -32,6 +39,10 @@ class TwilioSMSService:
             # Formatar número para padrão internacional
             formatted_phone = self.format_phone_for_twilio(phone_number)
             
+            # Log da formatação do telefone
+            if sms_structured_logger:
+                sms_structured_logger.log_phone_formatting(phone_number, formatted_phone, True)
+            
             # Formatar valor se fornecido
             amount_formatted = ""
             if amount:
@@ -48,16 +59,46 @@ class TwilioSMSService:
                 to=formatted_phone
             )
             
+            # Log estruturado do sucesso
+            if sms_structured_logger:
+                sms_structured_logger.log_sms_attempt(
+                    phone=phone_number,
+                    message_type="recovery",
+                    success=True,
+                    sid=message_obj.sid,
+                    formatted_phone=formatted_phone
+                )
+            
             logger.info(f"SMS enviado com sucesso para {formatted_phone} (original: {phone_number}). SID: {message_obj.sid}")
             return True, message_obj.sid, None
             
         except TwilioException as e:
             error_msg = f"Erro Twilio: {str(e)}"
+            
+            # Log estruturado do erro
+            if sms_structured_logger:
+                sms_structured_logger.log_sms_attempt(
+                    phone=phone_number,
+                    message_type="recovery",
+                    success=False,
+                    error=error_msg
+                )
+            
             logger.error(f"Falha ao enviar SMS para {phone_number}: {error_msg}")
             return False, None, error_msg
             
         except Exception as e:
             error_msg = f"Erro geral: {str(e)}"
+            
+            # Log estruturado do erro
+            if sms_structured_logger:
+                sms_structured_logger.log_sms_attempt(
+                    phone=phone_number,
+                    message_type="recovery",
+                    success=False,
+                    error=error_msg
+                )
+            
             logger.error(f"Falha inesperada ao enviar SMS para {phone_number}: {error_msg}")
             return False, None, error_msg
     
@@ -76,22 +117,56 @@ class TwilioSMSService:
             # Formatar número para padrão internacional
             formatted_phone = self.format_phone_for_twilio(phone_number)
             
+            # Log da formatação do telefone
+            if sms_structured_logger:
+                sms_structured_logger.log_phone_formatting(phone_number, formatted_phone, True)
+            
             message_obj = self.client.messages.create(
                 body=message,
                 from_=self.from_phone,
                 to=formatted_phone
             )
             
+            # Log estruturado do sucesso
+            if sms_structured_logger:
+                sms_structured_logger.log_sms_attempt(
+                    phone=phone_number,
+                    message_type="custom",
+                    success=True,
+                    sid=message_obj.sid,
+                    formatted_phone=formatted_phone
+                )
+            
             logger.info(f"SMS personalizado enviado para {formatted_phone} (original: {phone_number}). SID: {message_obj.sid}")
             return True, message_obj.sid, None
             
         except TwilioException as e:
             error_msg = f"Erro Twilio: {str(e)}"
+            
+            # Log estruturado do erro
+            if sms_structured_logger:
+                sms_structured_logger.log_sms_attempt(
+                    phone=phone_number,
+                    message_type="custom",
+                    success=False,
+                    error=error_msg
+                )
+            
             logger.error(f"Falha ao enviar SMS personalizado para {phone_number}: {error_msg}")
             return False, None, error_msg
             
         except Exception as e:
             error_msg = f"Erro geral: {str(e)}"
+            
+            # Log estruturado do erro
+            if sms_structured_logger:
+                sms_structured_logger.log_sms_attempt(
+                    phone=phone_number,
+                    message_type="custom",
+                    success=False,
+                    error=error_msg
+                )
+            
             logger.error(f"Falha inesperada ao enviar SMS personalizado para {phone_number}: {error_msg}")
             return False, None, error_msg
     

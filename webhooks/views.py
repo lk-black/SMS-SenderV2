@@ -1,6 +1,7 @@
 import logging
 import json
 import hashlib
+import time
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from rest_framework import status, generics
@@ -19,6 +20,12 @@ from .serializers import (
     GhostPayWebhookSerializer  # Serializer for GhostPay webhooks
 )
 from .tasks import schedule_sms_recovery
+from .logging_utils import (
+    webhook_structured_logger, 
+    sms_structured_logger, 
+    log_execution_time,
+    log_health_check
+)
 
 logger = logging.getLogger('webhooks')
 
@@ -217,58 +224,99 @@ class TribopayWebhookView(generics.GenericAPIView):
     
     def post(self, request):
         """
-        Processa webhook da TriboPay
+        Processa webhook da TriboPay com logging estruturado
         """
+        start_time = time.time()
+        platform = "TriboPay"
+        webhook_id = None
+        
         try:
-            logger.info(f"Webhook recebido: {request.data}")
+            # Log do webhook recebido
+            webhook_structured_logger.log_webhook_received(
+                platform=platform,
+                webhook_data=request.data,
+                request_info=request.META
+            )
             
             # Validar dados do webhook
             serializer = self.get_serializer(data=request.data)
             if not serializer.is_valid():
-                logger.error(f"Dados inválidos no webhook: {serializer.errors}")
+                processing_time = time.time() - start_time
+                webhook_structured_logger.log_webhook_processed(
+                    platform=platform,
+                    webhook_id=str(request.data.get('token', 'unknown')),
+                    success=False,
+                    error=f"Dados inválidos: {serializer.errors}",
+                    processing_time=processing_time
+                )
                 return Response(
-                    {'error': 'Dados inválidos', 'details': serializer.errors}, 
+                    {"error": "Dados inválidos", "details": serializer.errors},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Converter para formato do modelo
+            # Processar webhook
             webhook_data = serializer.to_webhook_event_data()
+            webhook_id = webhook_data.get('payment_id')
             
-            # Verificar se já foi processado (evitar duplicatas)
             webhook_event, created = WebhookEvent.objects.get_or_create(
                 defaults=webhook_data,
                 **{k: v for k, v in webhook_data.items() 
                    if k in ['payment_id', 'customer_phone', 'payment_method']}
             )
             
+            sms_scheduled = False
+            
             if created:
-                logger.info(f"Novo webhook criado: {webhook_event}")
+                webhook_structured_logger.logger.info(f"✅ Novo webhook criado: {webhook_event}")
                 
-                # Se for PIX aguardando pagamento, agendar SMS de recuperação
+                # Verificar se deve agendar SMS
                 if webhook_event.is_pix_waiting_payment():
-                    logger.info(f"Agendando SMS de recuperação para webhook {webhook_event.id}")
+                    webhook_structured_logger.logger.info(f"📱 PIX aguardando detectado - agendando SMS para webhook {webhook_event.id}")
+                    
                     try:
-                        schedule_sms_recovery.apply_async(
-                            args=[webhook_event.id],
-                            countdown=600  # 10 minutos em segundos
-                        )
-                        webhook_event.sms_scheduled = True
-                        webhook_event.save()
-                        logger.info(f"SMS agendado com sucesso para webhook {webhook_event.id}")
-                    except Exception as e:
-                        logger.warning(f"Falha ao agendar SMS (Redis não conectado): {str(e)}. Webhook salvo sem agendamento.")
-                        # Continua sem marcar sms_scheduled = True
+                        from .sms_scheduler import SMSSchedulerService
+                        scheduler = SMSSchedulerService()
+                        
+                        success, message = scheduler.schedule_sms_recovery(webhook_event.id)
+                        
+                        if success:
+                            webhook_event.sms_scheduled = True
+                            webhook_event.save()
+                            sms_scheduled = True
+                            webhook_structured_logger.logger.info(f"✅ SMS agendado com sucesso para webhook {webhook_event.id}: {message}")
+                        else:
+                            webhook_structured_logger.logger.warning(f"⚠️ Falha ao agendar SMS para webhook {webhook_event.id}: {message}")
+                            
+                    except Exception as sms_error:
+                        webhook_structured_logger.logger.error(f"❌ Erro ao agendar SMS para webhook {webhook_event.id}: {str(sms_error)}")
             else:
-                logger.info(f"Webhook duplicado ignorado: {webhook_event}")
+                webhook_structured_logger.log_duplicate_webhook(platform, webhook_id, webhook_event.webhook_hash)
             
             # Marcar como processado
             webhook_event.processed = True
             webhook_event.save()
             
-            return Response({'status': 'ok'}, status=status.HTTP_200_OK)
+            processing_time = time.time() - start_time
+            webhook_structured_logger.log_webhook_processed(
+                platform=platform,
+                webhook_id=webhook_id,
+                success=True,
+                sms_scheduled=sms_scheduled,
+                processing_time=processing_time
+            )
+            
+            return Response({"status": "ok"}, status=status.HTTP_200_OK)
             
         except Exception as e:
-            logger.error(f"Erro ao processar webhook: {str(e)}", exc_info=True)
+            processing_time = time.time() - start_time
+            webhook_structured_logger.log_webhook_processed(
+                platform=platform,
+                webhook_id=webhook_id or 'unknown',
+                success=False,
+                error=str(e),
+                processing_time=processing_time
+            )
+            
             return Response(
                 {'error': 'Erro interno do servidor'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -335,59 +383,79 @@ class TestSMSView(generics.GenericAPIView):
 @csrf_exempt
 @api_view(['GET'])
 @permission_classes([AllowAny])
+@log_execution_time('webhooks')
 def health_check(request):
     """
-    Endpoint de health check para monitoramento
+    Endpoint de health check para monitoramento com logging estruturado
     """
-    health_status = {
-        'status': 'healthy',
-        'service': 'SMS Sender',
-        'timestamp': timezone.now().isoformat(),
-    }
+    start_time = time.time()
     
-    # Verificar conexão com banco
     try:
-        from django.db import connection
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-        health_status['database'] = 'connected'
-    except Exception as e:
-        health_status['database'] = f'error: {str(e)}'
-        health_status['status'] = 'unhealthy'
-    
-    # Verificar Redis/Cache
-    try:
-        from django.core.cache import cache
-        cache.set('health_check', 'ok', 10)
-        result = cache.get('health_check')
-        if result == 'ok':
-            health_status['cache'] = 'connected'
-            health_status['cache_backend'] = cache.__class__.__name__
-        else:
-            health_status['cache'] = 'warning: test failed'
-    except Exception as e:
-        health_status['cache'] = f'error: {str(e)}'
-        health_status['status'] = 'degraded'
-    
-    # Verificar configuração do Redis
-    from django.conf import settings
-    health_status['redis_url_configured'] = bool(getattr(settings, 'REDIS_URL', None))
-    health_status['cache_backend_type'] = settings.CACHES['default']['BACKEND']
-    
-    # Verificar SMS Scheduler
-    try:
-        from .sms_scheduler import SMSSchedulerService
-        scheduler = SMSSchedulerService()
-        scheduler_status = {
-            'redis_available': scheduler.redis_available,
-            'celery_available': scheduler.celery_available,
+        # Database check
+        try:
+            from django.db import connection
+            connection.ensure_connection()
+            db_status = "connected"
+            log_health_check("database", "healthy")
+        except Exception as e:
+            db_status = f"error: {str(e)}"
+            log_health_check("database", "error", {"error": str(e)})
+
+        # Cache/Redis check
+        try:
+            from django.core.cache import cache
+            cache.set('health_check', 'ok', 10)
+            cache_result = cache.get('health_check')
+            if cache_result == 'ok':
+                cache_status = "connected"
+                log_health_check("cache", "healthy")
+            else:
+                cache_status = "warning: test failed"
+                log_health_check("cache", "warning", {"test_result": cache_result})
+        except Exception as e:
+            cache_status = f"error: {str(e)}"
+            log_health_check("cache", "error", {"error": str(e)})
+
+        # SMS Scheduler check
+        try:
+            from .sms_scheduler import SMSSchedulerService
+            scheduler = SMSSchedulerService()
+            redis_available = scheduler.is_redis_available()
+            celery_available = scheduler.is_celery_available()
+            
+            if redis_available and celery_available:
+                sms_status = {"redis_available": True, "celery_available": True}
+                log_health_check("sms_scheduler", "healthy", sms_status)
+            else:
+                sms_status = {"redis_available": redis_available, "celery_available": celery_available}
+                log_health_check("sms_scheduler", "warning", sms_status)
+        except Exception as e:
+            sms_status = f"error: {str(e)}"
+            log_health_check("sms_scheduler", "error", {"error": str(e)})
+
+        processing_time = time.time() - start_time
+        
+        health_data = {
+            'status': 'healthy',
+            'timestamp': timezone.now().isoformat(),
+            'database': db_status,
+            'cache': cache_status,
+            'sms_scheduler': sms_status,
+            'processing_time_ms': round(processing_time * 1000, 2)
         }
-        health_status['sms_scheduler'] = scheduler_status
+        
+        webhook_structured_logger.logger.info(f"🏥 Health check completado em {processing_time*1000:.1f}ms")
+        
+        return JsonResponse(health_data)
+        
     except Exception as e:
-        health_status['sms_scheduler'] = f'error: {str(e)}'
-    
-    status_code = 200 if health_status['status'] == 'healthy' else 500
-    return JsonResponse(health_status, status=status_code)
+        processing_time = time.time() - start_time
+        webhook_structured_logger.logger.error(f"🚨 Health check falhou após {processing_time*1000:.1f}ms: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'error': str(e),
+            'processing_time_ms': round(processing_time * 1000, 2)
+        }, status=500)
 
 
 @csrf_exempt
@@ -779,58 +847,99 @@ class GhostPayWebhookView(generics.GenericAPIView):
     
     def post(self, request):
         """
-        Processa webhook da GhostPay
+        Processa webhook da GhostPay com logging estruturado
         """
+        start_time = time.time()
+        platform = "GhostPay"
+        webhook_id = None
+        
         try:
-            logger.info(f"GhostPay Webhook recebido: {request.data}")
+            # Log do webhook recebido
+            webhook_structured_logger.log_webhook_received(
+                platform=platform,
+                webhook_data=request.data,
+                request_info=request.META
+            )
             
             # Validar dados do webhook
             serializer = self.get_serializer(data=request.data)
             if not serializer.is_valid():
-                logger.error(f"Dados inválidos no webhook GhostPay: {serializer.errors}")
+                processing_time = time.time() - start_time
+                webhook_structured_logger.log_webhook_processed(
+                    platform=platform,
+                    webhook_id=str(request.data.get('paymentId', 'unknown')),
+                    success=False,
+                    error=f"Dados inválidos: {serializer.errors}",
+                    processing_time=processing_time
+                )
                 return Response(
-                    {'error': 'Dados inválidos', 'details': serializer.errors}, 
+                    {"error": "Dados inválidos", "details": serializer.errors},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Converter para formato do modelo
+            # Processar webhook
             webhook_data = serializer.to_webhook_event_data()
+            webhook_id = webhook_data.get('payment_id')
             
-            # Verificar se já foi processado (evitar duplicatas)
             webhook_event, created = WebhookEvent.objects.get_or_create(
                 defaults=webhook_data,
                 **{k: v for k, v in webhook_data.items() 
                    if k in ['payment_id', 'customer_phone', 'payment_method']}
             )
             
+            sms_scheduled = False
+            
             if created:
-                logger.info(f"Novo webhook GhostPay criado: {webhook_event}")
+                webhook_structured_logger.logger.info(f"✅ Novo webhook GhostPay criado: {webhook_event}")
                 
-                # Se for PIX aguardando pagamento, agendar SMS de recuperação
+                # Verificar se deve agendar SMS
                 if webhook_event.is_pix_waiting_payment():
-                    logger.info(f"Agendando SMS de recuperação para webhook GhostPay {webhook_event.id}")
+                    webhook_structured_logger.logger.info(f"📱 PIX aguardando detectado - agendando SMS para webhook {webhook_event.id}")
+                    
                     try:
-                        schedule_sms_recovery.apply_async(
-                            args=[webhook_event.id],
-                            countdown=600  # 10 minutos em segundos
-                        )
-                        webhook_event.sms_scheduled = True
-                        webhook_event.save()
-                        logger.info(f"SMS agendado com sucesso para webhook GhostPay {webhook_event.id}")
-                    except Exception as e:
-                        logger.warning(f"Falha ao agendar SMS (Redis não conectado): {str(e)}. Webhook salvo sem agendamento.")
-                        # Continua sem marcar sms_scheduled = True
+                        from .sms_scheduler import SMSSchedulerService
+                        scheduler = SMSSchedulerService()
+                        
+                        success, message = scheduler.schedule_sms_recovery(webhook_event.id)
+                        
+                        if success:
+                            webhook_event.sms_scheduled = True
+                            webhook_event.save()
+                            sms_scheduled = True
+                            webhook_structured_logger.logger.info(f"✅ SMS agendado com sucesso para webhook {webhook_event.id}: {message}")
+                        else:
+                            webhook_structured_logger.logger.warning(f"⚠️ Falha ao agendar SMS para webhook {webhook_event.id}: {message}")
+                            
+                    except Exception as sms_error:
+                        webhook_structured_logger.logger.error(f"❌ Erro ao agendar SMS para webhook {webhook_event.id}: {str(sms_error)}")
             else:
-                logger.info(f"Webhook GhostPay duplicado ignorado: {webhook_event}")
+                webhook_structured_logger.log_duplicate_webhook(platform, webhook_id, webhook_event.webhook_hash)
             
             # Marcar como processado
             webhook_event.processed = True
             webhook_event.save()
             
-            return Response({'status': 'ok'}, status=status.HTTP_200_OK)
+            processing_time = time.time() - start_time
+            webhook_structured_logger.log_webhook_processed(
+                platform=platform,
+                webhook_id=webhook_id,
+                success=True,
+                sms_scheduled=sms_scheduled,
+                processing_time=processing_time
+            )
+            
+            return Response({"status": "ok"}, status=status.HTTP_200_OK)
             
         except Exception as e:
-            logger.error(f"Erro ao processar webhook GhostPay: {str(e)}", exc_info=True)
+            processing_time = time.time() - start_time
+            webhook_structured_logger.log_webhook_processed(
+                platform=platform,
+                webhook_id=webhook_id or 'unknown',
+                success=False,
+                error=str(e),
+                processing_time=processing_time
+            )
+            
             return Response(
                 {'error': 'Erro interno do servidor'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

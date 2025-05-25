@@ -192,7 +192,7 @@ class GhostPayWebhookSerializer(serializers.Serializer):
     paymentMethod = serializers.CharField(max_length=50)
     deliveryStatus = serializers.CharField(max_length=50, required=False, allow_null=True)
     totalValue = serializers.IntegerField()
-    netValue = serializers.IntegerField()
+    netValue = serializers.IntegerField(required=False, allow_null=True)
     
     # Campos PIX
     pixQrCode = serializers.CharField(required=False, allow_null=True)
