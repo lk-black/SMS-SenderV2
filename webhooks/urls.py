@@ -63,4 +63,7 @@ urlpatterns = [
     # Manual task processing endpoints (workaround for worker issues)
     path('force-process-pending-tasks/', views.force_process_pending_tasks, name='force-process-pending-tasks'),
     path('check-pending-sms/', views.check_pending_sms, name='check-pending-sms'),
+    
+    # Worker reset endpoint
+    path('reset-worker-models/', views.reset_worker_models, name='reset-worker-models'),
 ]

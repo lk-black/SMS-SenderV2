@@ -1800,3 +1800,133 @@ def check_pending_sms(request):
             'status': 'error',
             'message': f'Erro ao verificar SMS pendentes: {str(e)}'
         }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_worker_models(request):
+    """
+    Endpoint para resetar models do worker e aplicar migrations
+    """
+    try:
+        import importlib
+        from django.core.management import execute_from_command_line
+        from django.db import connection
+        
+        result = {
+            'timestamp': timezone.now().isoformat(),
+            'migrations': None,
+            'model_reload': None,
+            'table_verification': None,
+            'test_query': None
+        }
+        
+        # 1. Aplicar migrations
+        try:
+            from django.core.management import call_command
+            from io import StringIO
+            
+            migration_output = StringIO()
+            call_command('migrate', verbosity=2, stdout=migration_output)
+            
+            result['migrations'] = {
+                'status': 'success',
+                'output': migration_output.getvalue()
+            }
+        except Exception as e:
+            result['migrations'] = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # 2. Recarregar models
+        try:
+            # Reimportar o módulo de models
+            import webhooks.models
+            importlib.reload(webhooks.models)
+            
+            from webhooks.models import WebhookEvent, SMSLog
+            
+            result['model_reload'] = {
+                'status': 'success',
+                'webhook_table': WebhookEvent._meta.db_table,
+                'sms_table': SMSLog._meta.db_table
+            }
+        except Exception as e:
+            result['model_reload'] = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # 3. Verificar tabelas no banco
+        try:
+            with connection.cursor() as cursor:
+                # Para PostgreSQL em produção
+                cursor.execute("""
+                    SELECT table_name 
+                    FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name LIKE '%webhook%'
+                """)
+                tables = cursor.fetchall()
+                
+                result['table_verification'] = {
+                    'status': 'success',
+                    'tables_found': [t[0] for t in tables]
+                }
+        except Exception as e:
+            # Fallback para SQLite se necessário
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%webhook%'")
+                    tables = cursor.fetchall()
+                    
+                    result['table_verification'] = {
+                        'status': 'success',
+                        'tables_found': [t[0] for t in tables],
+                        'database_type': 'sqlite'
+                    }
+            except Exception as e2:
+                result['table_verification'] = {
+                    'status': 'error',
+                    'error': str(e2),
+                    'original_error': str(e)
+                }
+        
+        # 4. Testar query nos models
+        try:
+            from webhooks.models import WebhookEvent, SMSLog
+            
+            webhook_count = WebhookEvent.objects.count()
+            sms_count = SMSLog.objects.count()
+            
+            result['test_query'] = {
+                'status': 'success',
+                'webhook_count': webhook_count,
+                'sms_count': sms_count
+            }
+        except Exception as e:
+            result['test_query'] = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # Determinar status geral
+        all_success = all(
+            item and item.get('status') == 'success' 
+            for item in result.values() 
+            if isinstance(item, dict) and 'status' in item
+        )
+        
+        return Response({
+            'status': 'success' if all_success else 'partial',
+            'message': 'Worker models resetados com sucesso' if all_success else 'Reset parcial - verifique detalhes',
+            'details': result
+        })
+        
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Erro ao resetar worker models: {str(e)}'
+        }, status=500)
