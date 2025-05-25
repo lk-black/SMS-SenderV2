@@ -99,15 +99,7 @@ class TwilioSMSService:
         """
         Cria mensagem de recuperação personalizada
         """
-        return f"""Olá {customer_name}! 
-
-Seu pagamento {amount_formatted}ainda está pendente. 
-
-Para não perder sua compra, finalize o pagamento via PIX agora mesmo!
-
-Se já pagou, ignore esta mensagem.
-
-Dúvidas? Entre em contato conosco."""
+        return f"""ATENÇAO {customer_name} , voce esta prestes a perder sua INDENIZACAO, Resgate agora e garanta 20% OFF! https://go.tribopay.com.br/qoo2prjszh"""
     
     def validate_phone_number(self, phone_number):
         """
