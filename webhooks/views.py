@@ -196,7 +196,7 @@ class TribopayWebhookView(generics.GenericAPIView):
     """
     View baseada em classe para receber webhooks da TriboPay
     """
-    serializer_class = TribePayWebhookSerializer
+    serializer_class = TribePayRealWebhookSerializer
     permission_classes = [AllowAny]
     
     @method_decorator(csrf_exempt)
