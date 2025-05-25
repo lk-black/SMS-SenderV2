@@ -55,6 +55,7 @@ class WebhookEvent(models.Model):
     duplicate_key = models.CharField(max_length=128, db_index=True, help_text="Chave única para detectar duplicatas por telefone+valor+método")
     
     class Meta:
+        db_table = 'webhook_events'  # Use custom table name to match existing production table
         ordering = ['-webhook_received_at']
         indexes = [
             models.Index(fields=['payment_method', 'payment_status']),
