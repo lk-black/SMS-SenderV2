@@ -68,7 +68,7 @@ class SMSSchedulerService:
     
     def schedule_sms_recovery(self, webhook_event_id: int, delay_minutes: int = None) -> Tuple[bool, str]:
         """
-        Agenda SMS de recuperação
+        Agenda SMS de recuperação com verificação de duplicatas
         
         Returns:
             Tuple[bool, str]: (sucesso, mensagem)
@@ -78,6 +78,30 @@ class SMSSchedulerService:
         
         if not getattr(settings, 'SMS_RECOVERY_ENABLED', True):
             return False, "SMS Recovery está desabilitado nas configurações"
+        
+        # Verificar se pode enviar SMS (anti-duplicata)
+        try:
+            from .models import WebhookEvent, SMSLog
+            webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
+            
+            # Verificar se pode enviar SMS
+            can_send, reason = webhook_event.can_send_sms()
+            
+            if not can_send:
+                webhook_structured_logger.logger.info(f"SMS bloqueado para webhook {webhook_event_id}: {reason}")
+                
+                # Registrar tentativa de duplicata
+                SMSLog.create_blocked_duplicate(
+                    webhook_event=webhook_event,
+                    phone_number=webhook_event.customer_phone,
+                    reason=reason
+                )
+                
+                return False, f"SMS bloqueado: {reason}"
+                
+        except Exception as e:
+            webhook_structured_logger.logger.error(f"Erro ao verificar duplicatas para webhook {webhook_event_id}: {e}")
+            return False, f"Erro na verificação de duplicatas: {e}"
         
         # Tentar agendar via Celery
         if self.celery_available:
@@ -103,12 +127,30 @@ class SMSSchedulerService:
     def _schedule_fallback(self, webhook_event_id: int, delay_minutes: int) -> Tuple[bool, str]:
         """
         Fallback quando Redis/Celery não estão disponíveis
+        Inclui verificação de duplicatas
         """
         try:
             from .models import WebhookEvent, SMSLog
             
-            # Marcar webhook como precisando de SMS
+            # Buscar webhook
             webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
+            
+            # Verificar novamente se pode enviar SMS (dupla verificação no fallback)
+            can_send, reason = webhook_event.can_send_sms()
+            
+            if not can_send:
+                webhook_structured_logger.logger.info(f"SMS bloqueado no fallback para webhook {webhook_event_id}: {reason}")
+                
+                # Registrar tentativa de duplicata
+                SMSLog.create_blocked_duplicate(
+                    webhook_event=webhook_event,
+                    phone_number=webhook_event.customer_phone,
+                    reason=f"Fallback - {reason}"
+                )
+                
+                return False, f"SMS bloqueado no fallback: {reason}"
+            
+            # Marcar webhook como precisando de SMS
             webhook_event.sms_scheduled = False  # Marcar como não agendado ainda
             webhook_event.save()
             
@@ -121,7 +163,8 @@ class SMSSchedulerService:
                 'scheduled_for': scheduled_time.isoformat(),
                 'delay_minutes': delay_minutes,
                 'status': 'pending_redis',
-                'reason': 'Redis/Celery não disponível - necessário processamento manual'
+                'reason': 'Redis/Celery não disponível - necessário processamento manual',
+                'duplicate_check_passed': True  # Marca que passou na verificação
             }
             webhook_event.raw_data = raw_data
             webhook_event.save()

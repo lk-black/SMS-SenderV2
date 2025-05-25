@@ -159,8 +159,32 @@ class WebhookEvent(models.Model):
         Returns:
             tuple: (can_send: bool, reason: str)
         """
+        from .logging_utils import webhook_structured_logger
+        
         if force:
+            webhook_structured_logger.logger.info(f"🔓 SMS forçado para webhook {self.id} - ignorando verificações de duplicata")
             return True, "Envio forçado"
+        
+        # Coletar dados para análise
+        similar_webhooks = self.get_similar_recent_webhooks(hours=6)
+        recent_sms_count = sum(1 for w in similar_webhooks if w.sms_sent_count > 0)
+        
+        # Calcular tempo desde último SMS se houver
+        last_sms_hours_ago = None
+        if self.last_sms_sent_at:
+            from django.utils import timezone
+            time_diff = timezone.now() - self.last_sms_sent_at
+            last_sms_hours_ago = time_diff.total_seconds() / 3600
+        
+        # Log da análise de duplicatas
+        webhook_structured_logger.log_sms_duplicate_analysis(
+            webhook_id=self.id,
+            phone=self.customer_phone,
+            amount=self.amount or 0,
+            recent_sms_count=recent_sms_count,
+            similar_webhooks_count=len(similar_webhooks),
+            last_sms_hours_ago=last_sms_hours_ago
+        )
         
         # Verificar se já enviou SMS recentemente
         if self.sms_sent_count > 0 and self.last_sms_sent_at:
@@ -170,25 +194,47 @@ class WebhookEvent(models.Model):
             # Não enviar mais de 1 SMS por webhook por hora
             one_hour_ago = timezone.now() - timedelta(hours=1)
             if self.last_sms_sent_at > one_hour_ago:
-                return False, f"SMS já enviado para este webhook há menos de 1 hora (último: {self.last_sms_sent_at})"
+                reason = f"SMS já enviado para este webhook há menos de 1 hora (último: {self.last_sms_sent_at})"
+                webhook_structured_logger.log_sms_duplicate_blocked(
+                    webhook_id=self.id,
+                    phone=self.customer_phone,
+                    reason=reason,
+                    similar_webhooks=len(similar_webhooks)
+                )
+                return False, reason
         
         # Verificar se há SMS recentes para o mesmo cliente
         if self.has_recent_sms_to_same_customer(hours=6):  # 6 horas para evitar spam
-            similar_webhooks = self.get_similar_recent_webhooks(hours=6)
             recent_sms = [w for w in similar_webhooks if w.sms_sent_count > 0]
             if recent_sms:
                 last_sms_webhook = recent_sms[0]
-                return False, f"SMS já enviado para mesmo cliente/valor nas últimas 6h (webhook {last_sms_webhook.id} em {last_sms_webhook.last_sms_sent_at})"
+                reason = f"SMS já enviado para mesmo cliente/valor nas últimas 6h (webhook {last_sms_webhook.id} em {last_sms_webhook.last_sms_sent_at})"
+                webhook_structured_logger.log_sms_duplicate_blocked(
+                    webhook_id=self.id,
+                    phone=self.customer_phone,
+                    reason=reason,
+                    similar_webhooks=len(similar_webhooks)
+                )
+                return False, reason
         
+        webhook_structured_logger.logger.info(f"✅ SMS aprovado para webhook {self.id} - passou em todas as verificações anti-duplicata")
         return True, "Pode enviar SMS"
     
     def record_sms_sent(self):
         """Registra que um SMS foi enviado para este webhook"""
         from django.utils import timezone
+        from .logging_utils import webhook_structured_logger
         
         self.sms_sent_count += 1
         self.last_sms_sent_at = timezone.now()
         self.save(update_fields=['sms_sent_count', 'last_sms_sent_at'])
+        
+        # Log do registro
+        webhook_structured_logger.log_sms_sent_recorded(
+            webhook_id=self.id,
+            phone=self.customer_phone,
+            sms_count=self.sms_sent_count
+        )
 
 
 class SMSLog(models.Model):

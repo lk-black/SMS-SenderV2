@@ -114,6 +114,55 @@ class StructuredLogger:
         """Log para webhooks duplicados"""
         self.logger.warning(f"🔄 Webhook duplicado ignorado: {platform} | ID: {webhook_id} | Hash: {hash_value[:8]}")
     
+    def log_sms_duplicate_blocked(self, webhook_id: int, phone: str, reason: str, similar_webhooks: int = 0):
+        """Log estruturado para SMS bloqueados por duplicata"""
+        log_data = {
+            'event': 'sms_duplicate_blocked',
+            'webhook_id': webhook_id,
+            'phone': phone,
+            'reason': reason,
+            'similar_webhooks_count': similar_webhooks,
+            'timestamp': time.time()
+        }
+        
+        message = f"🚫 SMS bloqueado (duplicata): Webhook {webhook_id} | Telefone: {phone} | Motivo: {reason}"
+        if similar_webhooks > 0:
+            message += f" | Webhooks similares: {similar_webhooks}"
+            
+        self.logger.warning(message)
+        
+        # Log de métricas
+        logging.getLogger('metrics').info(json.dumps(log_data))
+    
+    def log_sms_duplicate_analysis(self, webhook_id: int, phone: str, amount: int, 
+                                 recent_sms_count: int, similar_webhooks_count: int, 
+                                 last_sms_hours_ago: float = None):
+        """Log detalhado da análise de duplicatas"""
+        log_data = {
+            'event': 'sms_duplicate_analysis',
+            'webhook_id': webhook_id,
+            'phone': phone,
+            'amount': amount,
+            'recent_sms_count': recent_sms_count,
+            'similar_webhooks_count': similar_webhooks_count,
+            'last_sms_hours_ago': last_sms_hours_ago,
+            'timestamp': time.time()
+        }
+        
+        message = f"🔍 Análise duplicata: Webhook {webhook_id} | SMS recentes: {recent_sms_count} | Webhooks similares: {similar_webhooks_count}"
+        if last_sms_hours_ago is not None:
+            message += f" | Último SMS: {last_sms_hours_ago:.1f}h atrás"
+            
+        self.logger.info(message)
+        
+        # Log de métricas
+        logging.getLogger('metrics').info(json.dumps(log_data))
+    
+    def log_sms_sent_recorded(self, webhook_id: int, phone: str, sms_count: int):
+        """Log quando SMS é registrado no webhook para controle de duplicatas"""
+        message = f"📝 SMS registrado: Webhook {webhook_id} | Telefone: {phone} | Total SMS: {sms_count}"
+        self.logger.info(message)
+    
     def log_scheduler_status(self, redis_available: bool, celery_available: bool, pending_count: int = 0):
         """Log para status do scheduler"""
         redis_emoji = "✅" if redis_available else "❌"

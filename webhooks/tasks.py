@@ -13,42 +13,59 @@ logger = logging.getLogger(__name__)
 def check_payment_status(self, webhook_event_id):
     """
     Task para verificar o status do pagamento após 10 minutos
-    e enviar SMS de recuperação se necessário
+    e enviar SMS de recuperação se necessário.
+    Inclui lógica de prevenção de duplicatas
     """
     try:
         webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
         
         # Verificar se o pagamento ainda está pendente
-        if webhook_event.payment_status == 'waiting_payment':
-            logger.info(f"Enviando SMS de recuperação para webhook {webhook_event_id}")
+        if webhook_event.payment_status != 'waiting_payment':
+            logger.info(f"Pagamento já foi processado para webhook {webhook_event_id}")
+            return
+        
+        # Verificar se pode enviar SMS (anti-duplicata)
+        can_send, reason = webhook_event.can_send_sms()
+        
+        if not can_send:
+            logger.info(f"SMS bloqueado para webhook {webhook_event_id}: {reason}")
             
-            # Enviar SMS de recuperação
-            sms_service = TwilioSMSService()
-            success, message_sid, error = sms_service.send_recovery_sms(
-                phone_number=webhook_event.customer_phone,
-                customer_name=webhook_event.customer_name or "Cliente",
-                amount=webhook_event.amount
-            )
-            
-            # Registrar o log do SMS
-            SMSLog.objects.create(
+            # Registrar tentativa de duplicata
+            SMSLog.create_blocked_duplicate(
                 webhook_event=webhook_event,
                 phone_number=webhook_event.customer_phone,
-                message_content=f"SMS de recuperação enviado para {webhook_event.customer_phone}",
-                status='sent' if success else 'failed',
-                twilio_sid=message_sid,
-                error_message=error
+                reason=reason
             )
-            
-            if not success:
-                logger.error(f"Falha ao enviar SMS para webhook {webhook_event_id}: {error}")
-                # Retry se falhou
-                raise self.retry(countdown=300, exc=Exception(error))
-            else:
-                logger.info(f"SMS enviado com sucesso para webhook {webhook_event_id}")
-                
+            return
+        
+        logger.info(f"Enviando SMS de recuperação para webhook {webhook_event_id}")
+        
+        # Enviar SMS de recuperação
+        sms_service = TwilioSMSService()
+        success, message_sid, error = sms_service.send_recovery_sms(
+            phone_number=webhook_event.customer_phone,
+            customer_name=webhook_event.customer_name or "Cliente",
+            amount=webhook_event.amount
+        )
+        
+        # Registrar o log do SMS
+        SMSLog.objects.create(
+            webhook_event=webhook_event,
+            phone_number=webhook_event.customer_phone,
+            message_content=f"SMS de recuperação enviado para {webhook_event.customer_phone}",
+            status='sent' if success else 'failed',
+            twilio_sid=message_sid,
+            error_message=error
+        )
+        
+        if not success:
+            logger.error(f"Falha ao enviar SMS para webhook {webhook_event_id}: {error}")
+            # Retry se falhou
+            raise self.retry(countdown=300, exc=Exception(error))
         else:
-            logger.info(f"Pagamento já foi processado para webhook {webhook_event_id}")
+            # Registrar envio no webhook para controle anti-duplicata
+            webhook_event.record_sms_sent()
+            logger.info(f"SMS enviado com sucesso para webhook {webhook_event_id}")
             
     except WebhookEvent.DoesNotExist:
         logger.error(f"Webhook event {webhook_event_id} não encontrado")
@@ -61,39 +78,56 @@ def check_payment_status(self, webhook_event_id):
 def schedule_sms_recovery(webhook_event_id):
     """
     Task para enviar SMS de recuperação após verificar status do pagamento
+    Inclui lógica de prevenção de duplicatas
     """
     try:
         webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
         
         # Verificar se o pagamento ainda está pendente
-        if webhook_event.payment_status == 'waiting_payment':
-            logger.info(f"Enviando SMS de recuperação para webhook {webhook_event_id}")
+        if webhook_event.payment_status != 'waiting_payment':
+            logger.info(f"Pagamento já foi processado para webhook {webhook_event_id}")
+            return
+        
+        # Verificar se pode enviar SMS (anti-duplicata)
+        can_send, reason = webhook_event.can_send_sms()
+        
+        if not can_send:
+            logger.info(f"SMS bloqueado para webhook {webhook_event_id}: {reason}")
             
-            # Enviar SMS de recuperação
-            sms_service = TwilioSMSService()
-            success, message_sid, error = sms_service.send_recovery_sms(
-                phone_number=webhook_event.customer_phone,
-                customer_name=webhook_event.customer_name or "Cliente",
-                amount=webhook_event.amount
-            )
-            
-            # Registrar o log do SMS
-            SMSLog.objects.create(
+            # Registrar tentativa de duplicata
+            SMSLog.create_blocked_duplicate(
                 webhook_event=webhook_event,
                 phone_number=webhook_event.customer_phone,
-                message=f"SMS de recuperação enviado para {webhook_event.customer_phone}",
-                status='sent' if success else 'failed',
-                twilio_sid=message_sid,
-                error_message=error
+                reason=reason
             )
-            
-            if success:
-                logger.info(f"SMS de recuperação enviado com sucesso para webhook {webhook_event_id}")
-            else:
-                logger.error(f"Falha ao enviar SMS de recuperação para webhook {webhook_event_id}: {error}")
-                
+            return
+        
+        logger.info(f"Enviando SMS de recuperação para webhook {webhook_event_id}")
+        
+        # Enviar SMS de recuperação
+        sms_service = TwilioSMSService()
+        success, message_sid, error = sms_service.send_recovery_sms(
+            phone_number=webhook_event.customer_phone,
+            customer_name=webhook_event.customer_name or "Cliente",
+            amount=webhook_event.amount
+        )
+        
+        # Registrar o log do SMS
+        sms_log = SMSLog.objects.create(
+            webhook_event=webhook_event,
+            phone_number=webhook_event.customer_phone,
+            message=f"SMS de recuperação enviado para {webhook_event.customer_phone}",
+            status='sent' if success else 'failed',
+            twilio_sid=message_sid,
+            error_message=error
+        )
+        
+        if success:
+            # Registrar envio no webhook para controle anti-duplicata
+            webhook_event.record_sms_sent()
+            logger.info(f"SMS de recuperação enviado com sucesso para webhook {webhook_event_id}")
         else:
-            logger.info(f"Pagamento já foi processado para webhook {webhook_event_id}")
+            logger.error(f"Falha ao enviar SMS de recuperação para webhook {webhook_event_id}: {error}")
             
     except WebhookEvent.DoesNotExist:
         logger.error(f"Webhook event {webhook_event_id} não encontrado")
