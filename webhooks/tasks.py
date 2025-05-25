@@ -177,3 +177,71 @@ def test_task_connection(test_message="Teste de conexão"):
     
     logger.info(f"Task de teste concluída: {result}")
     return result
+
+
+@shared_task
+def test_worker_database_access():
+    """
+    Task para testar se o worker consegue acessar corretamente o banco de dados
+    Especificamente testa se consegue acessar a tabela webhook_events
+    """
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        logger.info("=== TESTE DE ACESSO AO BANCO DE DADOS PELO WORKER ===")
+        
+        # Tentar importar os models
+        from .models import WebhookEvent, SMSLog
+        logger.info("✅ Models importados com sucesso")
+        
+        # Verificar se consegue acessar a tabela webhook_events
+        try:
+            webhook_count = WebhookEvent.objects.count()
+            logger.info(f"✅ Tabela webhook_events acessível - {webhook_count} registros")
+        except Exception as e:
+            logger.error(f"❌ ERRO ao acessar webhook_events: {str(e)}")
+            logger.error(f"❌ Tipo do erro: {type(e)}")
+            return f"ERRO webhook_events: {str(e)}"
+        
+        # Verificar se consegue acessar a tabela sms_logs  
+        try:
+            sms_count = SMSLog.objects.count()
+            logger.info(f"✅ Tabela sms_logs acessível - {sms_count} registros")
+        except Exception as e:
+            logger.error(f"❌ ERRO ao acessar sms_logs: {str(e)}")
+            return f"ERRO sms_logs: {str(e)}"
+        
+        # Testar se consegue buscar um webhook específico
+        try:
+            latest_webhook = WebhookEvent.objects.order_by('-created_at').first()
+            if latest_webhook:
+                logger.info(f"✅ Webhook mais recente acessível - ID: {latest_webhook.id}")
+                logger.info(f"   Payment ID: {latest_webhook.payment_id}")
+                logger.info(f"   Status: {latest_webhook.payment_status}")
+                logger.info(f"   Method: {latest_webhook.payment_method}")
+            else:
+                logger.info("⚠️ Nenhum webhook encontrado na tabela")
+        except Exception as e:
+            logger.error(f"❌ ERRO ao buscar webhook específico: {str(e)}")
+            return f"ERRO busca webhook: {str(e)}"
+        
+        # Testar importação da função can_send_sms
+        try:
+            if latest_webhook:
+                can_send, reason = latest_webhook.can_send_sms()
+                logger.info(f"✅ Método can_send_sms funcionando - Pode enviar: {can_send}, Razão: {reason}")
+            else:
+                logger.info("⚠️ Não foi possível testar can_send_sms - sem webhooks")
+        except Exception as e:
+            logger.error(f"❌ ERRO ao testar can_send_sms: {str(e)}")
+            return f"ERRO can_send_sms: {str(e)}"
+        
+        logger.info("🎉 TESTE COMPLETO - Worker consegue acessar o banco corretamente!")
+        return f"SUCESSO - webhook_events: {webhook_count}, sms_logs: {sms_count}"
+        
+    except Exception as exc:
+        logger.error(f"❌ ERRO FATAL no teste de banco: {str(exc)}")
+        logger.error(f"❌ Tipo do erro: {type(exc)}")
+        return f"ERRO FATAL: {str(exc)}"

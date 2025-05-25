@@ -1975,7 +1975,7 @@ def reset_worker_models(request):
             from webhooks.models import WebhookEvent, SMSLog
             
             webhook_count = WebhookEvent.objects.count()
-            sms_count = SMSLog.objects.count()
+            sms_count = SMSLog.objects.count();
             
             result['test_query'] = {
                 'status': 'success',
@@ -2005,4 +2005,33 @@ def reset_worker_models(request):
         return Response({
             'status': 'error',
             'message': f'Erro ao resetar worker models: {str(e)}'
+        }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def test_worker_database_access(request):
+    """
+    Endpoint para testar se o worker consegue acessar as tabelas corretas
+    Cria uma task específica para testar acesso ao banco de dados
+    """
+    try:
+        from .tasks import test_worker_database_access as test_task
+        
+        # Criar task que testa acesso ao banco de dados
+        result = test_task.delay()
+        
+        return Response({
+            'status': 'success',
+            'message': 'Task de teste de banco criada - verificar logs do worker',
+            'task_id': result.id,
+            'instruction': 'Aguarde 30 segundos e verifique os logs do worker para ver se conseguiu acessar as tabelas',
+            'expected_behavior': 'Worker deve conseguir contar registros na tabela webhook_events'
+        })
+        
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Erro ao criar task de teste: {str(e)}'
         }, status=500)

@@ -67,4 +67,7 @@ urlpatterns = [
     # Worker reset/restart endpoints
     path('reset-worker-models/', views.reset_worker_models, name='reset-worker-models'),
     path('force-restart-worker/', views.force_restart_worker, name='force-restart-worker'),
+    
+    # Worker database access test endpoint
+    path('test-worker-database-access/', views.test_worker_database_access, name='test-worker-database-access'),
 ]
