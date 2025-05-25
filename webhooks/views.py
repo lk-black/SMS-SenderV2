@@ -10,6 +10,7 @@ from django.utils.decorators import method_decorator
 from .models import WebhookEvent, SMSLog
 from .serializers import (
     TribePayWebhookSerializer, 
+    TribePayRealWebhookSerializer,
     WebhookEventSerializer, 
     SMSLogSerializer
 )
@@ -28,8 +29,8 @@ def tribopay_webhook(request):
     try:
         logger.info(f"Webhook recebido: {request.data}")
         
-        # Validar dados do webhook
-        serializer = TribePayWebhookSerializer(data=request.data)
+        # Validar dados do webhook com o formato real da TriboPay
+        serializer = TribePayRealWebhookSerializer(data=request.data)
         if not serializer.is_valid():
             logger.error(f"Dados inválidos no webhook: {serializer.errors}")
             return Response(

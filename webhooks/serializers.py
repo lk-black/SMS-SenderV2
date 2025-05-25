@@ -19,6 +19,87 @@ class WebhookEventSerializer(serializers.ModelSerializer):
         read_only_fields = ['webhook_hash', 'webhook_received_at', 'amount_in_real']
 
 
+class TribePayRealWebhookSerializer(serializers.Serializer):
+    """Serializer para o formato real da TriboPay baseado nos dados capturados"""
+    
+    # Campos do nível raiz
+    token = serializers.CharField(required=False)
+    event = serializers.CharField(required=False)
+    status = serializers.CharField(max_length=50)
+    method = serializers.CharField(max_length=20)
+    created_at = serializers.DateTimeField(required=False)
+    paid_at = serializers.DateTimeField(required=False)
+    platform = serializers.CharField(required=False)
+    
+    # Dados do cliente
+    customer = serializers.DictField()
+    
+    # Dados da transação
+    transaction = serializers.DictField()
+    
+    def validate_customer(self, value):
+        """Valida se os dados do cliente contêm telefone"""
+        phone_fields = ['phone', 'phone_number']
+        if not any(field in value for field in phone_fields):
+            raise serializers.ValidationError(
+                "Campo 'phone' ou 'phone_number' é obrigatório nos dados do cliente"
+            )
+        return value
+    
+    def validate_transaction(self, value):
+        """Valida se os dados da transação contêm ID e amount"""
+        if 'id' not in value:
+            raise serializers.ValidationError(
+                "Campo 'id' é obrigatório nos dados da transação"
+            )
+        if 'amount' not in value:
+            raise serializers.ValidationError(
+                "Campo 'amount' é obrigatório nos dados da transação"
+            )
+        return value
+    
+    def to_webhook_event_data(self):
+        """Converte dados validados para formato do WebhookEvent"""
+        validated_data = self.validated_data
+        customer_data = validated_data.get('customer', {})
+        transaction_data = validated_data.get('transaction', {})
+        
+        # Extrair telefone (priorizar phone_number, depois phone)
+        customer_phone = (
+            customer_data.get('phone_number') or 
+            customer_data.get('phone') or 
+            ''
+        )
+        
+        # Converter dados para formato serializável
+        raw_data = dict(validated_data)
+        
+        # Converter datetime para string se necessário
+        for key, value in raw_data.items():
+            if hasattr(value, 'isoformat'):  # datetime objects
+                raw_data[key] = value.isoformat()
+        
+        # Gerar hash único para evitar duplicatas
+        import hashlib
+        import json
+        data_str = json.dumps(raw_data, sort_keys=True, default=str)
+        webhook_hash = hashlib.sha256(data_str.encode()).hexdigest()
+        
+        return {
+            'webhook_hash': webhook_hash,
+            'payment_id': transaction_data['id'],
+            'payment_method': validated_data['method'],
+            'payment_status': validated_data['status'],
+            'amount': int(transaction_data['amount']),
+            'customer_phone': customer_phone,
+            'customer_name': customer_data.get('name'),
+            'customer_email': customer_data.get('email'),
+            'payment_created_at': validated_data.get('created_at'),
+            'payment_updated_at': validated_data.get('paid_at'),  # Usar paid_at como updated_at
+            'raw_data': raw_data,
+        }
+
+
 class TribePayWebhookSerializer(serializers.Serializer):
     """Serializer para processar dados recebidos da TriboPay"""
     
