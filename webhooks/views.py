@@ -381,3 +381,34 @@ def debug_db(request):
             'status': 'error',
             'error': str(e)
         }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def force_migrate(request):
+    """
+    Endpoint para forçar execução das migrations
+    """
+    try:
+        from django.core.management import call_command
+        from io import StringIO
+        
+        # Capturar output das migrations
+        out = StringIO()
+        
+        # Executar migrations
+        call_command('migrate', stdout=out)
+        
+        migration_output = out.getvalue()
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Migrations executadas com sucesso',
+            'output': migration_output
+        })
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'error': str(e)
+        }, status=500)

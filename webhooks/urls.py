@@ -10,6 +10,9 @@ urlpatterns = [
     # Debug endpoint
     path('debug/', views.debug_db, name='debug-db'),
     
+    # Force migrate endpoint
+    path('force-migrate/', views.force_migrate, name='force-migrate'),
+    
     # Endpoint principal para receber webhooks da TriboPay
     path('tribopay/', views.TribopayWebhookView.as_view(), name='tribopay-webhook'),
     
