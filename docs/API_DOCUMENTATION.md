@@ -1,10 +1,24 @@
-# 📡 SMS Recovery Service - API Documentation
+# 📋 SMS-Sender API Documentation
 
-**Base URL**: `https://sms-senderv2.onrender.com/api/webhooks/`
+## 🌐 Base URL
+```
+https://sms-senderv2.onrender.com/api/webhooks/
+```
+
+---
+
+## 📚 Documentação Completa
+
+📖 **Guias Disponíveis:**
+- [📋 Documentação Completa](./API_COMPLETE_DOCUMENTATION.md) - Todos os endpoints detalhados
+- [🚀 Guia Rápido](./API_QUICK_REFERENCE.md) - Comandos essenciais
+- [🛠️ Exemplos Práticos](./API_PRACTICAL_EXAMPLES.md) - Códigos em várias linguagens
+
+---
 
 ## 🎯 Visão Geral
 
-O SMS Recovery Service é uma API REST que processa webhooks da TriboPay, detecta pagamentos PIX pendentes e agenda SMS de recuperação após 10 minutos.
+O SMS Recovery Service é uma API REST que processa webhooks da TriboPay e GhostPay, detecta pagamentos PIX pendentes e agenda SMS de recuperação após 10 minutos.
 
 ## 🔗 Endpoints
 

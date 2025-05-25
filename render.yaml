@@ -9,7 +9,7 @@ services:
   - type: web
     name: sms-sender-web
     env: python
-    plan: free
+    plan: starter
     buildCommand: "./build.sh"
     startCommand: "gunicorn sms_sender.wsgi:application"
     envVars:
@@ -25,21 +25,21 @@ services:
   - type: worker
     name: sms-sender-worker
     env: python
-    plan: free
+    plan: starter
     buildCommand: "./build.sh"
     startCommand: "celery -A sms_sender worker --loglevel=info"
 
   - type: worker
     name: sms-sender-beat
     env: python
-    plan: free
+    plan: starter
     buildCommand: "./build.sh"
     startCommand: "celery -A sms_sender beat --loglevel=info"
 
 databases:
   - name: sms-sender-db
-    plan: free
+    plan: starter
 
 redis:
   - name: sms-sender-redis
-    plan: free
+    plan: starter
