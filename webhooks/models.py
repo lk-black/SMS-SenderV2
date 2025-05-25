@@ -90,7 +90,7 @@ class WebhookEvent(models.Model):
         """Verifica se é um PIX aguardando pagamento"""
         return (
             self.payment_method == 'pix' and 
-            self.payment_status == 'waiting_payment'
+            self.payment_status in ['waiting', 'waiting_payment', 'pending']
         )
 
 
