@@ -49,12 +49,20 @@ class WebhookEvent(models.Model):
     processed = models.BooleanField(default=False)
     sms_scheduled = models.BooleanField(default=False)
     
+    # Novos campos para melhor prevenção de duplicatas
+    sms_sent_count = models.PositiveIntegerField(default=0, help_text="Número de SMS enviados para este webhook")
+    last_sms_sent_at = models.DateTimeField(null=True, blank=True, help_text="Último horário de envio de SMS")
+    duplicate_key = models.CharField(max_length=128, db_index=True, help_text="Chave única para detectar duplicatas por telefone+valor+método")
+    
     class Meta:
         ordering = ['-webhook_received_at']
         indexes = [
             models.Index(fields=['payment_method', 'payment_status']),
             models.Index(fields=['webhook_received_at']),
             models.Index(fields=['processed']),
+            models.Index(fields=['customer_phone', 'payment_method', 'amount']),  # Para detectar duplicatas
+            models.Index(fields=['duplicate_key']),  # Índice para chave de duplicata
+            models.Index(fields=['sms_scheduled', 'payment_method', 'payment_status']),  # Para buscar PIX pendentes
         ]
     
     def save(self, *args, **kwargs):
@@ -64,7 +72,23 @@ class WebhookEvent(models.Model):
             raw_data_serializable = self._make_json_serializable(self.raw_data)
             data_string = json.dumps(raw_data_serializable, sort_keys=True)
             self.webhook_hash = hashlib.sha256(data_string.encode()).hexdigest()
+        
+        # Gerar chave de duplicata baseada em telefone + valor + método
+        if not self.duplicate_key:
+            self.duplicate_key = self._generate_duplicate_key()
+            
         super().save(*args, **kwargs)
+    
+    def _generate_duplicate_key(self):
+        """Gera chave única para detectar potenciais duplicatas baseada em telefone + valor + método"""
+        # Normalizar telefone removendo caracteres especiais
+        phone_normalized = ''.join(filter(str.isdigit, self.customer_phone))
+        
+        # Criar string única
+        key_string = f"{phone_normalized}_{self.amount}_{self.payment_method}"
+        
+        # Gerar hash para a chave
+        return hashlib.md5(key_string.encode()).hexdigest()
     
     def _make_json_serializable(self, data):
         """Converte objetos datetime para string para serialização JSON"""
@@ -92,6 +116,79 @@ class WebhookEvent(models.Model):
             self.payment_method == 'pix' and 
             self.payment_status in ['waiting', 'waiting_payment', 'pending']
         )
+    
+    def has_recent_sms_to_same_customer(self, hours=24):
+        """
+        Verifica se há SMS recentes enviados para o mesmo cliente com valor similar
+        """
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        time_threshold = timezone.now() - timedelta(hours=hours)
+        
+        # Buscar webhooks com a mesma chave de duplicata que tiveram SMS enviados recentemente
+        similar_webhooks = WebhookEvent.objects.filter(
+            duplicate_key=self.duplicate_key,
+            sms_sent_count__gt=0,
+            last_sms_sent_at__gte=time_threshold
+        ).exclude(id=self.id)
+        
+        return similar_webhooks.exists()
+    
+    def get_similar_recent_webhooks(self, hours=24):
+        """
+        Retorna webhooks similares recentes (mesmo telefone, valor e método)
+        """
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        time_threshold = timezone.now() - timedelta(hours=hours)
+        
+        return WebhookEvent.objects.filter(
+            duplicate_key=self.duplicate_key,
+            webhook_received_at__gte=time_threshold
+        ).exclude(id=self.id).order_by('-webhook_received_at')
+    
+    def can_send_sms(self, force=False):
+        """
+        Verifica se pode enviar SMS considerando regras de duplicata
+        
+        Args:
+            force (bool): Se True, ignora verificações de duplicata
+            
+        Returns:
+            tuple: (can_send: bool, reason: str)
+        """
+        if force:
+            return True, "Envio forçado"
+        
+        # Verificar se já enviou SMS recentemente
+        if self.sms_sent_count > 0 and self.last_sms_sent_at:
+            from django.utils import timezone
+            from datetime import timedelta
+            
+            # Não enviar mais de 1 SMS por webhook por hora
+            one_hour_ago = timezone.now() - timedelta(hours=1)
+            if self.last_sms_sent_at > one_hour_ago:
+                return False, f"SMS já enviado para este webhook há menos de 1 hora (último: {self.last_sms_sent_at})"
+        
+        # Verificar se há SMS recentes para o mesmo cliente
+        if self.has_recent_sms_to_same_customer(hours=6):  # 6 horas para evitar spam
+            similar_webhooks = self.get_similar_recent_webhooks(hours=6)
+            recent_sms = [w for w in similar_webhooks if w.sms_sent_count > 0]
+            if recent_sms:
+                last_sms_webhook = recent_sms[0]
+                return False, f"SMS já enviado para mesmo cliente/valor nas últimas 6h (webhook {last_sms_webhook.id} em {last_sms_webhook.last_sms_sent_at})"
+        
+        return True, "Pode enviar SMS"
+    
+    def record_sms_sent(self):
+        """Registra que um SMS foi enviado para este webhook"""
+        from django.utils import timezone
+        
+        self.sms_sent_count += 1
+        self.last_sms_sent_at = timezone.now()
+        self.save(update_fields=['sms_sent_count', 'last_sms_sent_at'])
 
 
 class SMSLog(models.Model):
@@ -102,6 +199,7 @@ class SMSLog(models.Model):
         ('failed', 'Falhou'),
         ('delivered', 'Entregue'),
         ('undelivered', 'Não Entregue'),
+        ('blocked_duplicate', 'Bloqueado - Duplicata'),  # Novo status
     ]
     
     webhook_event = models.ForeignKey(
@@ -126,12 +224,43 @@ class SMSLog(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
     price_unit = models.CharField(max_length=5, null=True, blank=True)
     
+    # Novos campos para rastreamento de duplicatas
+    is_duplicate_attempt = models.BooleanField(default=False, help_text="Indica se foi uma tentativa de envio duplicado")
+    duplicate_reason = models.TextField(null=True, blank=True, help_text="Motivo pelo qual foi considerado duplicata")
+    related_webhook_ids = models.JSONField(null=True, blank=True, help_text="IDs de webhooks relacionados/similares")
+    
     class Meta:
         ordering = ['-sent_at']
         indexes = [
             models.Index(fields=['status']),
             models.Index(fields=['sent_at']),
+            models.Index(fields=['phone_number', 'sent_at']),  # Para buscar SMS por telefone
+            models.Index(fields=['is_duplicate_attempt']),  # Para análise de duplicatas
         ]
     
     def __str__(self):
         return f"SMS para {self.phone_number} - {self.status}"
+    
+    @classmethod
+    def create_blocked_duplicate(cls, webhook_event, phone_number, reason, related_webhooks=None):
+        """
+        Cria um registro de SMS bloqueado por duplicata
+        
+        Args:
+            webhook_event: WebhookEvent relacionado
+            phone_number: Número de telefone
+            reason: Motivo do bloqueio
+            related_webhooks: Lista de webhooks relacionados
+        """
+        related_ids = [w.id for w in related_webhooks] if related_webhooks else []
+        
+        return cls.objects.create(
+            webhook_event=webhook_event,
+            phone_number=phone_number,
+            message=f"SMS bloqueado - duplicata detectada: {reason}",
+            status='blocked_duplicate',
+            is_duplicate_attempt=True,
+            duplicate_reason=reason,
+            related_webhook_ids=related_ids,
+            error_message=f"Envio bloqueado para prevenir duplicata: {reason}"
+        )

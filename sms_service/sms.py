@@ -174,7 +174,7 @@ class TwilioSMSService:
         """
         Cria mensagem de recuperação personalizada
         """
-        return f"""ATENÇAO {customer_name} , voce esta prestes a perder sua INDENIZACAO, Resgate agora e garanta 20% OFF! https://go.tribopay.com.br/qoo2prjszh"""
+        return f"""ATENÇAO {customer_name} , voce esta prestes a perder sua INDENIZACAO, Pague o imposto e resgate AGORA! https://encurtador.com.br/hevVF"""
     
     def validate_phone_number(self, phone_number):
         """
