@@ -29,6 +29,9 @@ class TwilioSMSService:
             tuple: (success: bool, message_sid: str, error: str)
         """
         try:
+            # Formatar número para padrão internacional
+            formatted_phone = self.format_phone_for_twilio(phone_number)
+            
             # Formatar valor se fornecido
             amount_formatted = ""
             if amount:
@@ -42,10 +45,10 @@ class TwilioSMSService:
             message_obj = self.client.messages.create(
                 body=message,
                 from_=self.from_phone,
-                to=phone_number
+                to=formatted_phone
             )
             
-            logger.info(f"SMS enviado com sucesso para {phone_number}. SID: {message_obj.sid}")
+            logger.info(f"SMS enviado com sucesso para {formatted_phone} (original: {phone_number}). SID: {message_obj.sid}")
             return True, message_obj.sid, None
             
         except TwilioException as e:
@@ -70,13 +73,16 @@ class TwilioSMSService:
             tuple: (success: bool, message_sid: str, error: str)
         """
         try:
+            # Formatar número para padrão internacional
+            formatted_phone = self.format_phone_for_twilio(phone_number)
+            
             message_obj = self.client.messages.create(
                 body=message,
                 from_=self.from_phone,
-                to=phone_number
+                to=formatted_phone
             )
             
-            logger.info(f"SMS personalizado enviado para {phone_number}. SID: {message_obj.sid}")
+            logger.info(f"SMS personalizado enviado para {formatted_phone} (original: {phone_number}). SID: {message_obj.sid}")
             return True, message_obj.sid, None
             
         except TwilioException as e:
@@ -125,3 +131,34 @@ Dúvidas? Entre em contato conosco."""
             return True
             
         return False
+    
+    def format_phone_for_twilio(self, phone_number):
+        """
+        Formata número de telefone para o padrão internacional do Twilio
+        
+        Args:
+            phone_number (str): Número do telefone
+            
+        Returns:
+            str: Número formatado no padrão internacional (+55DDNNNNNNNNN)
+        """
+        # Se já está no formato internacional, retorna como está
+        if phone_number.startswith('+'):
+            return phone_number
+        
+        # Remover caracteres especiais
+        clean_number = ''.join(filter(str.isdigit, phone_number))
+        
+        # Se tem 11 dígitos (formato brasileiro), adicionar +55
+        if len(clean_number) == 11:
+            return f"+55{clean_number}"
+        
+        # Se tem 10 dígitos (formato brasileiro sem 9), adicionar +55 e o 9
+        if len(clean_number) == 10:
+            # Assumir que é celular e adicionar o 9
+            ddd = clean_number[:2]
+            numero = clean_number[2:]
+            return f"+55{ddd}9{numero}"
+        
+        # Para outros formatos, retornar como está (pode ser internacional sem +)
+        return phone_number
