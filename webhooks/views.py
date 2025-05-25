@@ -10,7 +10,7 @@ from django.utils.decorators import method_decorator
 from .models import WebhookEvent, SMSLog
 from .serializers import (
     TribePayWebhookSerializer, 
-    TribePayRealWebhookSerializer,
+    TribePayRealWebhookSerializer,  # Updated serializer for real TriboPay format
     WebhookEventSerializer, 
     SMSLogSerializer
 )
@@ -25,6 +25,7 @@ logger = logging.getLogger('webhooks')
 def tribopay_webhook(request):
     """
     Endpoint para receber webhooks da TriboPay
+    Updated to handle real TriboPay webhook format with nested transaction and customer data
     """
     try:
         logger.info(f"Webhook recebido: {request.data}")
