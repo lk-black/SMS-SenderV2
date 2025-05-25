@@ -1199,3 +1199,187 @@ def twilio_config_check(request):
             'status': 'error',
             'message': str(e)
         }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def test_celery_task(request):
+    """
+    Endpoint para testar se as tasks Celery estão funcionando
+    """
+    try:
+        # Importar a task de teste
+        from .tasks import test_task_connection
+        
+        # Executar task imediatamente (sem agendamento)
+        result = test_task_connection.delay()
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Task Celery enviada para execução',
+            'task_id': result.id,
+            'task_state': result.state,
+            'info': 'Verificar logs do worker para confirmação'
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Erro ao executar task Celery: {str(e)}'
+        }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def force_process_pending_sms(request):
+    """
+    Força o processamento imediato de todos os SMS pendentes (sem worker)
+    """
+    try:
+        from .models import WebhookEvent
+        from sms_service.sms import TwilioSMSService
+        
+        # Buscar todos os webhooks PIX pendentes com SMS agendado
+        pending_webhooks = WebhookEvent.objects.filter(
+            payment_method='pix',
+            payment_status='waiting_payment',
+            sms_scheduled=True,
+            last_sms_sent_at__isnull=True  # Não enviou SMS ainda
+        )
+        
+        processed_count = 0
+        sent_count = 0
+        blocked_count = 0
+        
+        sms_service = TwilioSMSService()
+        
+        for webhook in pending_webhooks:
+            processed_count += 1
+            
+            # Verificar se pode enviar SMS (anti-duplicata)
+            can_send, reason = webhook.can_send_sms()
+            
+            if not can_send:
+                blocked_count += 1
+                logger.info(f"SMS bloqueado para webhook {webhook.id}: {reason}")
+                
+                # Registrar tentativa de duplicata
+                SMSLog.create_blocked_duplicate(
+                    webhook_event=webhook,
+                    phone_number=webhook.customer_phone,
+                    reason=f"Processamento forçado - {reason}"
+                )
+                continue
+            
+            # Enviar SMS
+            success, message_sid, error = sms_service.send_recovery_sms(
+                phone_number=webhook.customer_phone,
+                customer_name=webhook.customer_name or "Cliente",
+                amount=webhook.amount
+            )
+            
+            # Registrar o log do SMS
+            SMSLog.objects.create(
+                webhook_event=webhook,
+                phone_number=webhook.customer_phone,
+                message_content=f"SMS de recuperação (processamento forçado)",
+                status='sent' if success else 'failed',
+                twilio_sid=message_sid,
+                error_message=error
+            )
+            
+            if success:
+                sent_count += 1
+                webhook.record_sms_sent()
+                logger.info(f"SMS enviado via processamento forçado para webhook {webhook.id}")
+            else:
+                logger.error(f"Falha no SMS forçado para webhook {webhook.id}: {error}")
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': 'Processamento forçado concluído',
+            'processed_webhooks': processed_count,
+            'sms_sent': sent_count,
+            'sms_blocked': blocked_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro no processamento forçado: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Erro: {str(e)}'
+        }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def test_immediate_sms(request):
+    """
+    Testa o envio imediato de SMS com countdown de 1 minuto via Celery
+    """
+    try:
+        # Criar webhook de teste
+        test_payload = {
+            "paymentId": f"immediate_test_{int(time.time())}",
+            "status": "PENDING", 
+            "paymentMethod": "PIX",
+            "totalValue": 1000,
+            "customer": {
+                "name": "Teste Imediato",
+                "phone": "+5511999999999",
+                "email": "teste.imediato@email.com"
+            }
+        }
+        
+        # Processar webhook
+        from .serializers import GhostPayWebhookSerializer
+        serializer = GhostPayWebhookSerializer(data=test_payload)
+        
+        if serializer.is_valid():
+            webhook_data = serializer.to_webhook_event_data()
+            webhook_event, created = WebhookEvent.objects.get_or_create(
+                defaults=webhook_data,
+                **{k: v for k, v in webhook_data.items() 
+                   if k in ['payment_id', 'customer_phone', 'payment_method']}
+            )
+            
+            if created:
+                # Agendar SMS com countdown de 1 minuto apenas
+                from .tasks import schedule_sms_recovery
+                
+                result = schedule_sms_recovery.apply_async(
+                    args=[webhook_event.id],
+                    countdown=60  # 1 minuto apenas
+                )
+                
+                webhook_event.sms_scheduled = True
+                webhook_event.save()
+                
+                return JsonResponse({
+                    'status': 'success',
+                    'message': 'SMS agendado para 1 minuto (teste imediato)',
+                    'webhook_id': webhook_event.id,
+                    'payment_id': webhook_event.payment_id,
+                    'task_id': result.id,
+                    'countdown_seconds': 60
+                })
+            else:
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Webhook já existe'
+                })
+        else:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Dados inválidos',
+                'errors': serializer.errors
+            })
+            
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Erro: {str(e)}'
+        }, status=500)

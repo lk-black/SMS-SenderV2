@@ -51,4 +51,9 @@ urlpatterns = [
     path('ghostpay/', views.GhostPayWebhookView.as_view(), name='ghostpay-webhook'),
     path('ghostpay-test/', views.ghostpay_test_format, name='ghostpay-test'),
     path('ghostpay-debug/', views.ghostpay_debug, name='ghostpay-debug'),
+    
+    # Test endpoints for Celery workers
+    path('test-celery-task/', views.test_celery_task, name='test-celery-task'),
+    path('force-process-pending-sms/', views.force_process_pending_sms, name='force-process-pending-sms'),
+    path('test-immediate-sms/', views.test_immediate_sms, name='test-immediate-sms'),
 ]
