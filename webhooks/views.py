@@ -1392,6 +1392,9 @@ def worker_diagnosis(request):
     """
     Endpoint para diagnosticar problemas do worker Celery
     """
+    from decouple import config
+    import redis
+    
     try:
         diagnosis_result = {
             'timestamp': timezone.now().isoformat(),
@@ -1466,9 +1469,9 @@ def worker_diagnosis(request):
         
         # 4. Teste de criação de task
         try:
-            from webhooks.tasks import debug_task
+            from webhooks.tasks import test_task_connection
             
-            result = debug_task.delay("Diagnosis test")
+            result = test_task_connection.delay("Diagnosis test")
             
             diagnosis_result['task_creation'] = {
                 'task_id': result.id,
