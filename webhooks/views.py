@@ -1805,6 +1805,82 @@ def check_pending_sms(request):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
+def force_restart_worker(request):
+    """
+    Endpoint para tentar forçar restart/reload do worker
+    """
+    try:
+        from sms_sender.celery import app
+        from decouple import config
+        import redis
+        
+        # 1. Verificar conexão Redis
+        redis_url = config('REDIS_URL', default='redis://localhost:6379/0')
+        r = redis.from_url(redis_url)
+        r.ping()
+        
+        # 2. Tentar fazer reload dos workers
+        try:
+            app.control.broadcast('pool_restart', reply=True)
+            reload_result = "Pool restart broadcasted"
+        except Exception as e:
+            reload_result = f"Pool restart failed: {e}"
+        
+        # 3. Verificar quantas tasks estão na fila
+        queue_length = r.llen('celery')
+        
+        # 4. Criar task de teste para verificar se worker está respondendo
+        from .tasks import test_task_connection
+        try:
+            test_result = test_task_connection.delay("Worker restart test")
+            test_task_id = test_result.id
+            test_status = "Test task created"
+        except Exception as e:
+            test_task_id = None
+            test_status = f"Test task failed: {e}"
+        
+        # 5. Recarregar apps Django
+        try:
+            from django.utils.module_loading import autodiscover_modules
+            autodiscover_modules('tasks')
+            app.autodiscover_tasks()
+            discover_result = "Tasks rediscovered"
+        except Exception as e:
+            discover_result = f"Task discovery failed: {e}"
+        
+        return JsonResponse({
+            'status': 'success',
+            'restart_attempts': {
+                'pool_restart': reload_result,
+                'task_discovery': discover_result,
+                'test_task': {
+                    'status': test_status,
+                    'task_id': test_task_id
+                }
+            },
+            'worker_info': {
+                'redis_queue_length': queue_length,
+                'redis_connected': True
+            },
+            'message': 'Worker restart attempt completed. Check worker logs for actual restart.',
+            'next_steps': [
+                'Check Render dashboard for worker logs',
+                'Verify if worker picked up the test task',
+                'If still not working, manual worker restart required'
+            ]
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Erro no restart do worker: {str(e)}',
+            'recommendation': 'Manual worker restart required via Render dashboard'
+        }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
 def reset_worker_models(request):
     """
     Endpoint para resetar models do worker e aplicar migrations
