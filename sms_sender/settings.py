@@ -106,6 +106,14 @@ DATABASE_URL = config('DATABASE_URL', default=None)
 if DATABASE_URL and not DATABASE_URL.startswith('postgresql://user:password'):
     try:
         DATABASES['default'] = dj_database_url.parse(DATABASE_URL)
+        # Configurações adicionais para produção
+        DATABASES['default'].update({
+            'CONN_MAX_AGE': 600,  # Conexões persistentes
+            'OPTIONS': {
+                'connect_timeout': 10,
+                'server_side_binding': True,
+            }
+        })
     except ValueError as e:
         print(f"Warning: Invalid DATABASE_URL format: {e}. Using SQLite as fallback.")
         # Continue using SQLite as fallback

@@ -239,9 +239,9 @@ O SMS Recovery Service é uma API REST que processa webhooks da TriboPay, detect
 
 ---
 
-### 10. Forçar Migração
+### 10. Forçar Migração (Manual)
 **Endpoint**: `POST /force-migrate/`  
-**Descrição**: Executa migrações do banco de dados manualmente  
+**Descrição**: Executa migrações do banco de dados manualmente (backup - migrações são automáticas no deploy)  
 **Autenticação**: Não requerida
 
 **Resposta de Sucesso**:
@@ -252,6 +252,8 @@ O SMS Recovery Service é uma API REST que processa webhooks da TriboPay, detect
   "output": "Operations to perform:\n  Apply all migrations..."
 }
 ```
+
+**Nota**: ⚠️ Este endpoint é para casos de emergência. As migrações são executadas automaticamente a cada deploy através do sistema de `release phase` do Render.
 
 ---
 
@@ -288,6 +290,13 @@ O SMS Recovery Service é uma API REST que processa webhooks da TriboPay, detect
 | 500 | Erro interno do servidor |
 
 ## 🔧 Configuração
+
+### Migração Automática 🔄
+O sistema executa migrações automaticamente a cada deploy:
+- **Build Phase**: Migrações básicas durante o build
+- **Release Phase**: Verificação e aplicação com retry automático
+- **Verificação**: Aguarda banco estar disponível antes de migrar
+- **Logs**: Processo completo logado para debugging
 
 ### Variáveis de Ambiente (Twilio)
 ```bash
