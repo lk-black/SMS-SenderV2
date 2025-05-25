@@ -28,11 +28,13 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Copy project
 COPY . /app/
 
-# Copy and make scripts executable
+# Copy and make all startup scripts executable
 COPY wait_for_db.sh /app/
-COPY start_worker.sh /app/
-COPY start_beat.sh /app/
-RUN chmod +x /app/wait_for_db.sh /app/start_worker.sh /app/start_beat.sh
+COPY start_web.sh /app/
+COPY start_celery_worker.sh /app/
+COPY start_celery_beat.sh /app/
+COPY validate_services.sh /app/
+RUN chmod +x /app/wait_for_db.sh /app/start_web.sh /app/start_celery_worker.sh /app/start_celery_beat.sh /app/validate_services.sh
 
 # Create a non-root user
 RUN adduser --disabled-password --gecos '' appuser \
@@ -48,5 +50,5 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Default command (can be overridden)
-CMD ["./wait_for_db.sh", "gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "sms_sender.wsgi:application"]
+# Default command - run web service with proper database-first startup
+CMD ["./start_web.sh"]

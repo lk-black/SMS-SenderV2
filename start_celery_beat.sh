@@ -4,8 +4,8 @@ set -e
 
 echo "⏰ Iniciando Celery Beat..."
 
-# Aguardar serviços essenciais
-./wait_for_db.sh echo "Serviços prontos para beat"
+# Aguardar serviços essenciais (sem migração - beat não precisa aplicar migrations principais)
+./wait_for_db.sh
 
 # Verificar configuração do Celery
 echo "🔧 Verificando configuração do Celery Beat..."

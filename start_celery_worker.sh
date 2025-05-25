@@ -4,8 +4,8 @@ set -e
 
 echo "⚙️ Iniciando WORKER Celery..."
 
-# Aguardar serviços essenciais
-./wait_for_db.sh echo "Serviços prontos para worker"
+# Aguardar serviços essenciais (sem migração - worker não precisa aplicar migrations)
+./wait_for_db.sh
 
 # Verificar configuração do Celery
 echo "🔧 Verificando configuração do Celery..."

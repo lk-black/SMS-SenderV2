@@ -4,12 +4,8 @@ set -e
 
 echo "🌐 Iniciando Serviço WEB (Gunicorn)..."
 
-# Aguardar serviços essenciais
-./wait_for_db.sh echo "Serviços prontos para web"
-
-# Aplicar migrações
-echo "🔄 Aplicando migrações..."
-python manage.py migrate --noinput
+# Aguardar serviços essenciais E aplicar migrações automaticamente
+./wait_for_db.sh --migrate
 
 # Coletar arquivos estáticos
 echo "📁 Coletando arquivos estáticos..."

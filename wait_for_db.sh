@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # Script robusto para verificar se o banco de dados e Redis estão prontos
+# Opcionalmente executa migrações antes do comando principal
 
 set -e
 
 echo "🔍 Verificando se os serviços estão prontos..."
+
+# Verificar se deve executar migrações (primeira flag/argumento)
+RUN_MIGRATIONS=false
+if [[ "$1" == "--migrate" ]]; then
+    RUN_MIGRATIONS=true
+    shift  # Remove o primeiro argumento para não afetar o comando final
+fi
 
 # Função para aguardar PostgreSQL
 wait_for_postgres() {
@@ -68,7 +76,16 @@ except Exception as e:
 wait_for_postgres
 wait_for_redis
 
-echo "🚀 Todos os serviços estão prontos! Executando comando..."
+echo "🚀 Todos os serviços estão prontos!"
+
+# Executar migrações se solicitado
+if [[ "$RUN_MIGRATIONS" == "true" ]]; then
+    echo "🔄 Aplicando migrações de banco de dados..."
+    python manage.py migrate --noinput
+    echo "✅ Migrações aplicadas com sucesso!"
+fi
+
+echo "🎯 Executando comando principal..."
 
 # Executar comando passado como argumentos
 exec "$@"
