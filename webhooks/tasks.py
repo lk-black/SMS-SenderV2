@@ -119,3 +119,27 @@ def update_payment_status(webhook_event_id, new_status):
         logger.error(f"Webhook event {webhook_event_id} não encontrado para atualização")
     except Exception as exc:
         logger.error(f"Erro ao atualizar status do webhook {webhook_event_id}: {str(exc)}")
+
+
+@shared_task
+def test_task_connection():
+    """
+    Task simples para testar conexão Redis/Celery
+    """
+    import time
+    from datetime import datetime
+    
+    logger.info("Task de teste iniciada")
+    
+    # Simular algum processamento
+    time.sleep(1)
+    
+    result = {
+        'status': 'success',
+        'message': 'Redis/Celery funcionando corretamente',
+        'timestamp': datetime.now().isoformat(),
+        'task_id': test_task_connection.request.id if hasattr(test_task_connection, 'request') else None
+    }
+    
+    logger.info(f"Task de teste concluída: {result}")
+    return result
