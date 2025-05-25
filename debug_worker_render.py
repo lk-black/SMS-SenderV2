@@ -63,10 +63,11 @@ def test_task_creation():
         print("🔄 Testando criação de task...")
         
         # Importar tasks
-        from webhooks.tasks import send_sms_task, debug_task
+        from webhooks.tasks import test_task_connection
+        from sms_sender.celery import debug_task
         
         # Criar task de debug
-        result = debug_task.delay("Teste de diagnóstico")
+        result = test_task_connection.delay("Teste de diagnóstico")
         
         print(f"✅ Task criada: {result.id}")
         print(f"✅ Task state: {result.state}")
