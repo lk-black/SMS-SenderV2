@@ -15,7 +15,8 @@ from .serializers import (
     TribePayWebhookSerializer, 
     TribePayRealWebhookSerializer,  # Updated serializer for real TriboPay format
     WebhookEventSerializer, 
-    SMSLogSerializer
+    SMSLogSerializer,
+    GhostPayWebhookSerializer  # Serializer for GhostPay webhooks
 )
 from .tasks import schedule_sms_recovery
 
@@ -763,3 +764,131 @@ def test_phone_formatting(request):
             {'error': 'Erro interno do servidor'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+class GhostPayWebhookView(generics.GenericAPIView):
+    """
+    View para receber webhooks da GhostPay
+    """
+    serializer_class = GhostPayWebhookSerializer
+    permission_classes = [AllowAny]
+    
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+    
+    def post(self, request):
+        """
+        Processa webhook da GhostPay
+        """
+        try:
+            logger.info(f"GhostPay Webhook recebido: {request.data}")
+            
+            # Validar dados do webhook
+            serializer = self.get_serializer(data=request.data)
+            if not serializer.is_valid():
+                logger.error(f"Dados inválidos no webhook GhostPay: {serializer.errors}")
+                return Response(
+                    {'error': 'Dados inválidos', 'details': serializer.errors}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Converter para formato do modelo
+            webhook_data = serializer.to_webhook_event_data()
+            
+            # Verificar se já foi processado (evitar duplicatas)
+            webhook_event, created = WebhookEvent.objects.get_or_create(
+                defaults=webhook_data,
+                **{k: v for k, v in webhook_data.items() 
+                   if k in ['payment_id', 'customer_phone', 'payment_method']}
+            )
+            
+            if created:
+                logger.info(f"Novo webhook GhostPay criado: {webhook_event}")
+                
+                # Se for PIX aguardando pagamento, agendar SMS de recuperação
+                if webhook_event.is_pix_waiting_payment():
+                    logger.info(f"Agendando SMS de recuperação para webhook GhostPay {webhook_event.id}")
+                    try:
+                        schedule_sms_recovery.apply_async(
+                            args=[webhook_event.id],
+                            countdown=600  # 10 minutos em segundos
+                        )
+                        webhook_event.sms_scheduled = True
+                        webhook_event.save()
+                        logger.info(f"SMS agendado com sucesso para webhook GhostPay {webhook_event.id}")
+                    except Exception as e:
+                        logger.warning(f"Falha ao agendar SMS (Redis não conectado): {str(e)}. Webhook salvo sem agendamento.")
+                        # Continua sem marcar sms_scheduled = True
+            else:
+                logger.info(f"Webhook GhostPay duplicado ignorado: {webhook_event}")
+            
+            # Marcar como processado
+            webhook_event.processed = True
+            webhook_event.save()
+            
+            return Response({'status': 'ok'}, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Erro ao processar webhook GhostPay: {str(e)}", exc_info=True)
+            return Response(
+                {'error': 'Erro interno do servidor'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def ghostpay_test_format(request):
+    """
+    Endpoint de teste para validar o formato da GhostPay sem usar banco de dados
+    """
+    try:
+        logger.info(f"GhostPay Test Format - Data received: {request.data}")
+        
+        # Testar o serializer da GhostPay
+        from .serializers import GhostPayWebhookSerializer
+        
+        serializer = GhostPayWebhookSerializer(data=request.data)
+        if serializer.is_valid():
+            # Converter para formato do webhook event
+            webhook_data = serializer.to_webhook_event_data()
+            
+            # Log dos dados processados
+            logger.info(f"GhostPay Test - Dados processados: {webhook_data}")
+            
+            # Verificar se é PIX aguardando pagamento
+            is_pix_waiting = (
+                webhook_data.get('payment_method') == 'pix' and 
+                webhook_data.get('payment_status') in ['waiting_payment', 'pending']
+            )
+            
+            return JsonResponse({
+                'status': 'success',
+                'message': 'Formato GhostPay validado com sucesso',
+                'data': {
+                    'payment_id': webhook_data.get('payment_id'),
+                    'payment_method': webhook_data.get('payment_method'),
+                    'payment_status': webhook_data.get('payment_status'),
+                    'amount': webhook_data.get('amount'),
+                    'amount_in_real': webhook_data.get('amount', 0) / 100,
+                    'customer_phone': webhook_data.get('customer_phone'),
+                    'customer_name': webhook_data.get('customer_name'),
+                    'is_pix_waiting': is_pix_waiting,
+                    'would_schedule_sms': is_pix_waiting
+                }
+            })
+        else:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Formato inválido',
+                'errors': serializer.errors
+            }, status=400)
+            
+    except Exception as e:
+        logger.error(f"Erro no teste de formato GhostPay: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': str(e)
+        }, status=500)

@@ -177,3 +177,122 @@ class SMSLogSerializer(serializers.ModelSerializer):
             'sent_at', 'delivered_at', 'price', 'price_unit'
         ]
         read_only_fields = ['sent_at']
+
+
+class GhostPayWebhookSerializer(serializers.Serializer):
+    """Serializer para webhooks da GhostPay"""
+    
+    # Campos principais
+    paymentId = serializers.CharField(max_length=100)
+    externalId = serializers.CharField(max_length=100, required=False, allow_null=True)
+    checkoutUrl = serializers.URLField(required=False, allow_null=True)
+    referrerUrl = serializers.URLField(required=False, allow_null=True)
+    customId = serializers.CharField(max_length=100, required=False, allow_null=True)
+    status = serializers.CharField(max_length=50)
+    paymentMethod = serializers.CharField(max_length=50)
+    deliveryStatus = serializers.CharField(max_length=50, required=False, allow_null=True)
+    totalValue = serializers.IntegerField()
+    netValue = serializers.IntegerField()
+    
+    # Campos PIX
+    pixQrCode = serializers.CharField(required=False, allow_null=True)
+    pixCode = serializers.CharField(required=False, allow_null=True)
+    
+    # Campos Boleto
+    billetUrl = serializers.URLField(required=False, allow_null=True)
+    billetCode = serializers.CharField(required=False, allow_null=True)
+    
+    # Datas
+    expiresAt = serializers.DateTimeField(required=False, allow_null=True)
+    dueAt = serializers.DateTimeField(required=False, allow_null=True)
+    createdAt = serializers.DateTimeField(required=False, allow_null=True)
+    updatedAt = serializers.DateTimeField(required=False, allow_null=True)
+    approvedAt = serializers.DateTimeField(required=False, allow_null=True)
+    refundedAt = serializers.DateTimeField(required=False, allow_null=True)
+    chargebackAt = serializers.DateTimeField(required=False, allow_null=True)
+    rejectedAt = serializers.DateTimeField(required=False, allow_null=True)
+    
+    # Campos opcionais
+    installments = serializers.IntegerField(required=False, allow_null=True)
+    utm = serializers.CharField(required=False, allow_null=True)
+    items = serializers.ListField(required=False)
+    
+    # Dados do cliente
+    customer = serializers.DictField()
+    
+    def validate_customer(self, value):
+        """Valida se os dados do cliente contêm telefone"""
+        if 'phone' not in value:
+            raise serializers.ValidationError(
+                "Campo 'phone' é obrigatório nos dados do cliente"
+            )
+        return value
+    
+    def validate_status(self, value):
+        """Valida status válidos da GhostPay"""
+        valid_statuses = ['PENDING', 'APPROVED', 'REJECTED', 'REFUNDED', 'CHARGEBACK', 'IN_REVIEW']
+        if value not in valid_statuses:
+            raise serializers.ValidationError(f"Status deve ser um dos seguintes: {', '.join(valid_statuses)}")
+        return value
+    
+    def validate_paymentMethod(self, value):
+        """Valida métodos de pagamento válidos"""
+        valid_methods = ['PIX', 'CREDIT_CARD', 'DEBIT_CARD', 'BOLETO', 'BILLET']
+        if value not in valid_methods:
+            raise serializers.ValidationError(f"Método de pagamento deve ser um dos seguintes: {', '.join(valid_methods)}")
+        return value
+    
+    def to_webhook_event_data(self):
+        """Converte dados validados para formato do WebhookEvent"""
+        validated_data = self.validated_data
+        customer_data = validated_data.get('customer', {})
+        
+        # Mapear status da GhostPay para formato interno
+        status_mapping = {
+            'PENDING': 'waiting_payment',
+            'IN_REVIEW': 'waiting_payment', 
+            'APPROVED': 'paid',
+            'REJECTED': 'refused',
+            'REFUNDED': 'refunded',
+            'CHARGEBACK': 'refunded'
+        }
+        
+        # Mapear método de pagamento para formato interno
+        method_mapping = {
+            'PIX': 'pix',
+            'CREDIT_CARD': 'credit_card',
+            'DEBIT_CARD': 'debit_card',
+            'BOLETO': 'bank_slip',
+            'BILLET': 'bank_slip'
+        }
+        
+        internal_status = status_mapping.get(validated_data['status'], validated_data['status'].lower())
+        internal_method = method_mapping.get(validated_data['paymentMethod'], validated_data['paymentMethod'].lower())
+        
+        # Converter dados para formato serializável
+        raw_data = dict(validated_data)
+        
+        # Converter datetime para string se necessário
+        for key, value in raw_data.items():
+            if hasattr(value, 'isoformat'):  # datetime objects
+                raw_data[key] = value.isoformat()
+        
+        # Gerar hash único para evitar duplicatas
+        import hashlib
+        import json
+        data_str = json.dumps(raw_data, sort_keys=True, default=str)
+        webhook_hash = hashlib.sha256(data_str.encode()).hexdigest()
+        
+        return {
+            'webhook_hash': webhook_hash,
+            'payment_id': validated_data['paymentId'],
+            'payment_method': internal_method,
+            'payment_status': internal_status,
+            'amount': validated_data['totalValue'],
+            'customer_phone': customer_data.get('phone', ''),
+            'customer_name': customer_data.get('name', ''),
+            'customer_email': customer_data.get('email', ''),
+            'payment_created_at': validated_data.get('createdAt'),
+            'payment_updated_at': validated_data.get('updatedAt'),
+            'raw_data': raw_data,
+        }

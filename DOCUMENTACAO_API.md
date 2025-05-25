@@ -62,6 +62,37 @@ Content-Type: application/json
 
 ---
 
+### 2.2. 📞 Webhook GhostPay 
+```http
+POST /ghostpay/
+Content-Type: application/json
+```
+
+**Payload Esperado**:
+```json
+{
+  "paymentId": "txn_123456789",
+  "status": "PENDING",
+  "paymentMethod": "PIX",
+  "totalValue": 5000,
+  "customer": {
+    "name": "João Silva",
+    "phone": "+5517992666990"
+  }
+}
+```
+
+**Comportamento**:
+- ✅ **PIX + PENDING** = Agenda SMS em 10 minutos
+- ❌ **Outros casos** = Apenas registra
+
+**Resposta**:
+```json
+{"status": "ok"}
+```
+
+---
+
 ### 3. 📊 Monitoramento
 
 #### Listar Webhooks
@@ -96,6 +127,20 @@ Content-Type: application/json
   "method": "pix",
   "customer": {"name": "Teste", "phone_number": "11999999999"},
   "transaction": {"id": "test_001", "amount": 5000}
+}
+```
+
+#### Teste de Formato GhostPay (sem salvar)
+```http
+POST /ghostpay-test/
+Content-Type: application/json
+
+{
+  "paymentId": "txn_test_001",
+  "status": "PENDING",
+  "paymentMethod": "PIX",
+  "totalValue": 5000,
+  "customer": {"name": "Teste", "phone": "+5511999999999"}
 }
 ```
 

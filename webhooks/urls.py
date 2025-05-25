@@ -43,4 +43,8 @@ urlpatterns = [
     
     # Phone formatting test endpoint
     path('test-phone-formatting/', views.test_phone_formatting, name='test-phone-formatting'),
+    
+    # GhostPay endpoints
+    path('ghostpay/', views.GhostPayWebhookView.as_view(), name='ghostpay-webhook'),
+    path('ghostpay-test/', views.ghostpay_test_format, name='ghostpay-test'),
 ]
