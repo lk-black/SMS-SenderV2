@@ -63,15 +63,35 @@ class WebhookEventAdmin(admin.ModelAdmin):
     mark_as_processed.short_description = 'Marcar como processado'
     
     def resend_recovery_sms(self, request, queryset):
-        """Reenviar SMS de recuperação"""
-        from .tasks import schedule_sms_recovery
+        """Reenviar SMS de recuperação usando o scheduler service"""
+        from .sms_scheduler import SMSSchedulerService
         
+        scheduler = SMSSchedulerService()
         count = 0
-        for webhook in queryset.filter(payment_method='pix', payment_status='waiting_payment'):
-            schedule_sms_recovery.delay(webhook.id)
-            count += 1
+        success_count = 0
+        failed_count = 0
         
-        self.message_user(request, f'{count} SMS(s) de recuperação agendado(s).')
+        for webhook in queryset.filter(payment_method='pix', payment_status='waiting_payment'):
+            count += 1
+            
+            # Cancelar tasks pendentes primeiro
+            webhook.cancel_pending_tasks("SMS reenvio manual - Admin")
+            
+            # Agendar novo SMS
+            success, message = scheduler.schedule_sms_recovery(webhook.id)
+            
+            if success:
+                success_count += 1
+                webhook.sms_scheduled = True
+                webhook.save()
+            else:
+                failed_count += 1
+        
+        if failed_count > 0:
+            self.message_user(request, f'{success_count} SMS(s) agendado(s) com sucesso, {failed_count} falharam.')
+        else:
+            self.message_user(request, f'{success_count} SMS(s) de recuperação agendado(s) com sucesso.')
+        
     resend_recovery_sms.short_description = 'Reenviar SMS de recuperação'
 
 

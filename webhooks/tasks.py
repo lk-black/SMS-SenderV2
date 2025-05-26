@@ -14,12 +14,18 @@ def check_payment_status(self, webhook_event_id):
     """
     Task para verificar o status do pagamento após 10 minutos
     e enviar SMS de recuperação se necessário.
-    Inclui lógica de prevenção de duplicatas
+    Inclui lógica de prevenção de duplicatas e cancelamento de tasks
     """
+    task_id = self.request.id
+    
     try:
-        logger.info(f"🔄 [WORKER] Iniciando verificação de pagamento - Webhook ID: {webhook_event_id}")
+        logger.info(f"🔄 [WORKER] Iniciando verificação de pagamento - Webhook ID: {webhook_event_id}, Task ID: {task_id}")
         
         webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
+        
+        # Remover esta task da lista de pendentes (task está sendo executada)
+        if task_id:
+            webhook_event.remove_pending_task(task_id)
         
         # Log detalhado do webhook
         logger.info(f"📋 [WORKER] Webhook carregado - ID: {webhook_event_id}")
@@ -141,6 +147,7 @@ def check_payment_status(self, webhook_event_id):
             webhook_event.record_sms_sent()
             logger.info(f"🎉 [WORKER] Processamento concluído com sucesso para webhook {webhook_event_id}")
             logger.info(f"   📊 Status final: SMS enviado e registrado")
+            logger.info(f"   🗑️ Tasks pendentes canceladas automaticamente")
             
     except WebhookEvent.DoesNotExist:
         logger.error(f"❌ [WORKER] Webhook event {webhook_event_id} não encontrado na base de dados")
@@ -167,12 +174,18 @@ def check_payment_status(self, webhook_event_id):
 def schedule_sms_recovery(webhook_event_id):
     """
     Task para enviar SMS de recuperação após verificar status do pagamento
-    Inclui lógica de prevenção de duplicatas
+    Inclui lógica de prevenção de duplicatas e cancelamento de tasks
     """
+    task_id = schedule_sms_recovery.request.id
+    
     try:
-        logger.info(f"🚀 [WORKER] Iniciando task de recuperação SMS - Webhook ID: {webhook_event_id}")
+        logger.info(f"🚀 [WORKER] Iniciando task de recuperação SMS - Webhook ID: {webhook_event_id}, Task ID: {task_id}")
         
         webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
+        
+        # Remover esta task da lista de pendentes (task está sendo executada)
+        if task_id:
+            webhook_event.remove_pending_task(task_id)
         
         # Log detalhado do webhook
         logger.info(f"📋 [WORKER] Dados do webhook carregados:")

@@ -1724,314 +1724,144 @@ def force_process_pending_tasks(request):
 @csrf_exempt
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def check_pending_sms(request):
+def pending_tasks_list(request):
     """
-    Endpoint para verificar webhooks que precisam de SMS de recuperação
+    Endpoint para listar todas as tasks pendentes de todos os webhooks
     """
     try:
-        # Buscar webhooks PIX aguardando pagamento que ainda não tiveram SMS enviado
-        pending_webhooks = WebhookEvent.objects.filter(
-            payment_method='PIX',
-            payment_status='waiting_payment',
-            sms_scheduled=False,
-            processed=True
-        ).order_by('-created_at')[:20]
+        from .models import WebhookEvent
         
-        # Buscar webhooks com SMS agendado mas não enviado
-        scheduled_not_sent = WebhookEvent.objects.filter(
-            payment_method='PIX',
-            payment_status='waiting_payment',
-            sms_scheduled=True
+        # Buscar webhooks com tasks pendentes
+        webhooks_with_tasks = WebhookEvent.objects.exclude(
+            pending_task_ids__isnull=True
         ).exclude(
-            smslog__status='sent'
-        ).order_by('-created_at')[:20]
-        
-        # Verificar fila do Celery
-        from decouple import config
-        import redis
-        
-        redis_url = config('REDIS_URL', default='redis://localhost:6379/0')
-        r = redis.from_url(redis_url)
-        queue_length = r.llen('celery')
-        
-        pending_data = []
-        for webhook in pending_webhooks:
-            pending_data.append({
-                'webhook_id': webhook.id,
-                'payment_id': webhook.payment_id,
-                'customer_phone': webhook.customer_phone,
-                'payment_amount': float(webhook.payment_amount),
-                'created_at': webhook.created_at.isoformat(),
-                'sms_scheduled': webhook.sms_scheduled,
-                'needs_sms': True
-            })
-        
-        scheduled_data = []
-        for webhook in scheduled_not_sent:
-            last_sms = webhook.smslog_set.order_by('-created_at').first()
-            scheduled_data.append({
-                'webhook_id': webhook.id,
-                'payment_id': webhook.payment_id,
-                'customer_phone': webhook.customer_phone,
-                'payment_amount': float(webhook.payment_amount),
-                'created_at': webhook.created_at.isoformat(),
-                'sms_scheduled': webhook.sms_scheduled,
-                'last_sms_status': last_sms.status if last_sms else None,
-                'last_sms_at': last_sms.created_at.isoformat() if last_sms else None,
-                'needs_retry': True
-            })
-        
-        return Response({
-            'status': 'success',
-            'celery_queue_length': queue_length,
-            'pending_sms_count': len(pending_data),
-            'scheduled_not_sent_count': len(scheduled_data),
-            'pending_webhooks': pending_data,
-            'scheduled_not_sent': scheduled_data,
-            'summary': {
-                'total_needing_attention': len(pending_data) + len(scheduled_data),
-                'queue_has_tasks': queue_length > 0,
-                'action_needed': len(pending_data) > 0 or len(scheduled_data) > 0
-            }
-        })
-        
-    except Exception as e:
-        return Response({
-            'status': 'error',
-            'message': f'Erro ao verificar SMS pendentes: {str(e)}'
-        }, status=500)
-
-
-@csrf_exempt
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def force_restart_worker(request):
-    """
-    Endpoint para tentar forçar restart/reload do worker
-    """
-    try:
-        from sms_sender.celery import app
-        from decouple import config
-        import redis
-        
-        # 1. Verificar conexão Redis
-        redis_url = config('REDIS_URL', default='redis://localhost:6379/0')
-        r = redis.from_url(redis_url)
-        r.ping()
-        
-        # 2. Tentar fazer reload dos workers
-        try:
-            app.control.broadcast('pool_restart', reply=True)
-            reload_result = "Pool restart broadcasted"
-        except Exception as e:
-            reload_result = f"Pool restart failed: {e}"
-        
-        # 3. Verificar quantas tasks estão na fila
-        queue_length = r.llen('celery')
-        
-        # 4. Criar task de teste para verificar se worker está respondendo
-        from .tasks import test_task_connection
-        try:
-            test_result = test_task_connection.delay("Worker restart test")
-            test_task_id = test_result.id
-            test_status = "Test task created"
-        except Exception as e:
-            test_task_id = None
-            test_status = f"Test task failed: {e}"
-        
-        # 5. Recarregar apps Django
-        try:
-            from django.utils.module_loading import autodiscover_modules
-            autodiscover_modules('tasks')
-            app.autodiscover_tasks()
-            discover_result = "Tasks rediscovered"
-        except Exception as e:
-            discover_result = f"Task discovery failed: {e}"
-        
-        return JsonResponse({
-            'status': 'success',
-            'restart_attempts': {
-                'pool_restart': reload_result,
-                'task_discovery': discover_result,
-                'test_task': {
-                    'status': test_status,
-                    'task_id': test_task_id
-                }
-            },
-            'worker_info': {
-                'redis_queue_length': queue_length,
-                'redis_connected': True
-            },
-            'message': 'Worker restart attempt completed. Check worker logs for actual restart.',
-            'next_steps': [
-                'Check Render dashboard for worker logs',
-                'Verify if worker picked up the test task',
-                'If still not working, manual worker restart required'
-            ]
-        })
-        
-    except Exception as e:
-        return JsonResponse({
-            'status': 'error',
-            'message': f'Erro no restart do worker: {str(e)}',
-            'recommendation': 'Manual worker restart required via Render dashboard'
-        }, status=500)
-
-
-@csrf_exempt
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def reset_worker_models(request):
-    """
-    Endpoint para resetar models do worker e aplicar migrations
-    """
-    try:
-        import importlib
-        from django.core.management import execute_from_command_line
-        from django.db import connection
-        
-        result = {
-            'timestamp': timezone.now().isoformat(),
-            'migrations': None,
-            'model_reload': None,
-            'table_verification': None,
-            'test_query': None
-        }
-        
-        # 1. Aplicar migrations
-        try:
-            from django.core.management import call_command
-            from io import StringIO
-            
-            migration_output = StringIO()
-            call_command('migrate', verbosity=2, stdout=migration_output)
-            
-            result['migrations'] = {
-                'status': 'success',
-                'output': migration_output.getvalue()
-            }
-        except Exception as e:
-            result['migrations'] = {
-                'status': 'error',
-                'error': str(e)
-            }
-        
-        # 2. Recarregar models
-        try:
-            # Reimportar o módulo de models
-            import webhooks.models
-            importlib.reload(webhooks.models)
-            
-            from webhooks.models import WebhookEvent, SMSLog
-            
-            result['model_reload'] = {
-                'status': 'success',
-                'webhook_table': WebhookEvent._meta.db_table,
-                'sms_table': SMSLog._meta.db_table
-            }
-        except Exception as e:
-            result['model_reload'] = {
-                'status': 'error',
-                'error': str(e)
-            }
-        
-        # 3. Verificar tabelas no banco
-        try:
-            with connection.cursor() as cursor:
-                # Para PostgreSQL em produção
-                cursor.execute("""
-                    SELECT table_name 
-                    FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name LIKE '%webhook%'
-                """)
-                tables = cursor.fetchall()
-                
-                result['table_verification'] = {
-                    'status': 'success',
-                    'tables_found': [t[0] for t in tables]
-                }
-        except Exception as e:
-            # Fallback para SQLite se necessário
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%webhook%'")
-                    tables = cursor.fetchall()
-                    
-                    result['table_verification'] = {
-                        'status': 'success',
-                        'tables_found': [t[0] for t in tables],
-                        'database_type': 'sqlite'
-                    }
-            except Exception as e2:
-                result['table_verification'] = {
-                    'status': 'error',
-                    'error': str(e2),
-                    'original_error': str(e)
-                }
-        
-        # 4. Testar query nos models
-        try:
-            from webhooks.models import WebhookEvent, SMSLog
-            
-            webhook_count = WebhookEvent.objects.count()
-            sms_count = SMSLog.objects.count();
-            
-            result['test_query'] = {
-                'status': 'success',
-                'webhook_count': webhook_count,
-                'sms_count': sms_count
-            }
-        except Exception as e:
-            result['test_query'] = {
-                'status': 'error',
-                'error': str(e)
-            }
-        
-        # Determinar status geral
-        all_success = all(
-            item and item.get('status') == 'success' 
-            for item in result.values() 
-            if isinstance(item, dict) and 'status' in item
+            pending_task_ids=[]
         )
         
-        return Response({
-            'status': 'success' if all_success else 'partial',
-            'message': 'Worker models resetados com sucesso' if all_success else 'Reset parcial - verifique detalhes',
-            'details': result
+        tasks_data = []
+        total_tasks = 0
+        
+        for webhook in webhooks_with_tasks:
+            pending_count = webhook.get_pending_tasks_count()
+            if pending_count > 0:
+                total_tasks += pending_count
+                tasks_data.append({
+                    'webhook_id': webhook.id,
+                    'payment_id': webhook.payment_id,
+                    'customer_phone': webhook.customer_phone,
+                    'customer_name': webhook.customer_name,
+                    'payment_status': webhook.payment_status,
+                    'amount': webhook.amount,
+                    'pending_task_ids': webhook.pending_task_ids,
+                    'pending_tasks_count': pending_count,
+                    'created_at': webhook.webhook_received_at.isoformat(),
+                    'sms_scheduled': webhook.sms_scheduled,
+                    'sms_sent_count': webhook.sms_sent_count
+                })
+        
+        return JsonResponse({
+            'status': 'success',
+            'total_webhooks_with_tasks': len(tasks_data),
+            'total_pending_tasks': total_tasks,
+            'webhooks': tasks_data
         })
         
     except Exception as e:
-        return Response({
+        logger.error(f"Erro ao listar tasks pendentes: {e}")
+        return JsonResponse({
             'status': 'error',
-            'message': f'Erro ao resetar worker models: {str(e)}'
+            'message': f'Erro: {str(e)}'
         }, status=500)
 
 
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
-def test_worker_database_access(request):
+def cancel_webhook_tasks(request, webhook_id):
     """
-    Endpoint para testar se o worker consegue acessar as tabelas corretas
-    Cria uma task específica para testar acesso ao banco de dados
+    Endpoint para cancelar todas as tasks pendentes de um webhook específico
     """
     try:
-        from .tasks import test_worker_database_access as test_task
+        from .models import WebhookEvent
         
-        # Criar task que testa acesso ao banco de dados
-        result = test_task.delay()
+        webhook_event = WebhookEvent.objects.get(id=webhook_id)
+        pending_count = webhook_event.get_pending_tasks_count()
         
-        return Response({
+        if pending_count == 0:
+            return JsonResponse({
+                'status': 'info',
+                'message': f'Nenhuma task pendente para webhook {webhook_id}',
+                'webhook_id': webhook_id,
+                'cancelled_tasks': 0
+            })
+        
+        # Cancelar todas as tasks pendentes
+        reason = request.data.get('reason', 'Cancelamento manual via API')
+        cancelled_tasks = webhook_event.cancel_pending_tasks(reason)
+        
+        logger.info(f"Tasks canceladas manualmente para webhook {webhook_id}: {cancelled_tasks} tasks")
+        
+        return JsonResponse({
             'status': 'success',
-            'message': 'Task de teste de banco criada - verificar logs do worker',
-            'task_id': result.id,
-            'instruction': 'Aguarde 30 segundos e verifique os logs do worker para ver se conseguiu acessar as tabelas',
-            'expected_behavior': 'Worker deve conseguir contar registros na tabela webhook_events'
+            'message': f'{cancelled_tasks} task(s) cancelada(s) com sucesso',
+            'webhook_id': webhook_id,
+            'cancelled_tasks': cancelled_tasks,
+            'reason': reason
+        })
+        
+    except WebhookEvent.DoesNotExist:
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Webhook {webhook_id} não encontrado'
+        }, status=404)
+    except Exception as e:
+        logger.error(f"Erro ao cancelar tasks para webhook {webhook_id}: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Erro: {str(e)}'
+        }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def cancel_all_pending_tasks(request):
+    """
+    Endpoint para cancelar TODAS as tasks pendentes de todos os webhooks
+    """
+    try:
+        from .models import WebhookEvent
+        
+        # Buscar todos os webhooks com tasks pendentes
+        webhooks_with_tasks = WebhookEvent.objects.exclude(
+            pending_task_ids__isnull=True
+        ).exclude(
+            pending_task_ids=[]
+        )
+        
+        total_cancelled = 0
+        webhooks_processed = 0
+        reason = request.data.get('reason', 'Cancelamento em massa via API')
+        
+        for webhook in webhooks_with_tasks:
+            pending_count = webhook.get_pending_tasks_count()
+            if pending_count > 0:
+                cancelled = webhook.cancel_pending_tasks(reason)
+                total_cancelled += cancelled
+                webhooks_processed += 1
+                logger.info(f"Tasks canceladas em massa para webhook {webhook.id}: {cancelled} tasks")
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'{total_cancelled} task(s) cancelada(s) de {webhooks_processed} webhook(s)',
+            'total_cancelled_tasks': total_cancelled,
+            'webhooks_processed': webhooks_processed,
+            'reason': reason
         })
         
     except Exception as e:
-        return Response({
+        logger.error(f"Erro ao cancelar todas as tasks: {e}")
+        return JsonResponse({
             'status': 'error',
-            'message': f'Erro ao criar task de teste: {str(e)}'
+            'message': f'Erro: {str(e)}'
         }, status=500)

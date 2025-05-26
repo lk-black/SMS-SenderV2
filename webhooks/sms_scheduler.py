@@ -107,11 +107,20 @@ class SMSSchedulerService:
         if self.celery_available:
             try:
                 from .tasks import schedule_sms_recovery
+                from .models import WebhookEvent
                 
                 result = schedule_sms_recovery.apply_async(
                     args=[webhook_event_id],
                     countdown=delay_minutes * 60  # Converter para segundos
                 )
+                
+                # Armazenar task ID no webhook para permitir cancelamento posterior
+                try:
+                    webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
+                    webhook_event.add_pending_task(result.id)
+                    webhook_structured_logger.logger.info(f"📝 Task ID {result.id} registrada para webhook {webhook_event_id}")
+                except Exception as e:
+                    webhook_structured_logger.logger.error(f"❌ Erro ao registrar task ID: {e}")
                 
                 message = f"SMS agendado via Celery (task_id: {result.id})"
                 webhook_structured_logger.logger.info(f"✅ SMS agendado via Celery para webhook {webhook_event_id} em {delay_minutes} minutos")

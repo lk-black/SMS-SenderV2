@@ -62,12 +62,9 @@ urlpatterns = [
     
     # Manual task processing endpoints (workaround for worker issues)
     path('force-process-pending-tasks/', views.force_process_pending_tasks, name='force-process-pending-tasks'),
-    path('check-pending-sms/', views.check_pending_sms, name='check-pending-sms'),
     
-    # Worker reset/restart endpoints
-    path('reset-worker-models/', views.reset_worker_models, name='reset-worker-models'),
-    path('force-restart-worker/', views.force_restart_worker, name='force-restart-worker'),
-    
-    # Worker database access test endpoint
-    path('test-worker-database-access/', views.test_worker_database_access, name='test-worker-database-access'),
+    # Task administration endpoints
+    path('pending-tasks/', views.pending_tasks_list, name='pending-tasks-list'),
+    path('cancel-webhook-tasks/<int:webhook_id>/', views.cancel_webhook_tasks, name='cancel-webhook-tasks'),
+    path('cancel-all-pending-tasks/', views.cancel_all_pending_tasks, name='cancel-all-pending-tasks'),
 ]

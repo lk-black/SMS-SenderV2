@@ -54,6 +54,9 @@ class WebhookEvent(models.Model):
     last_sms_sent_at = models.DateTimeField(null=True, blank=True, help_text="Último horário de envio de SMS")
     duplicate_key = models.CharField(max_length=128, db_index=True, help_text="Chave única para detectar duplicatas por telefone+valor+método")
     
+    # Campo para tracking e cancelamento de tasks do Celery
+    pending_task_ids = models.JSONField(null=True, blank=True, help_text="Lista de task IDs do Celery pendentes para este webhook")
+    
     class Meta:
         db_table = 'webhook_events'  # Use custom table name to match existing production table
         ordering = ['-webhook_received_at']
@@ -236,6 +239,68 @@ class WebhookEvent(models.Model):
             phone=self.customer_phone,
             sms_count=self.sms_sent_count
         )
+        
+        # Cancelar tasks pendentes após SMS enviado com sucesso
+        self.cancel_pending_tasks("SMS enviado com sucesso")
+    
+    def add_pending_task(self, task_id: str):
+        """Adiciona um task ID à lista de tasks pendentes"""
+        from .logging_utils import webhook_structured_logger
+        
+        if not self.pending_task_ids:
+            self.pending_task_ids = []
+        
+        if task_id not in self.pending_task_ids:
+            self.pending_task_ids.append(task_id)
+            self.save(update_fields=['pending_task_ids'])
+            webhook_structured_logger.logger.info(f"📝 [TASK TRACKING] Task {task_id} adicionada para webhook {self.id}")
+    
+    def remove_pending_task(self, task_id: str):
+        """Remove um task ID da lista de tasks pendentes"""
+        from .logging_utils import webhook_structured_logger
+        
+        if self.pending_task_ids and task_id in self.pending_task_ids:
+            self.pending_task_ids.remove(task_id)
+            self.save(update_fields=['pending_task_ids'])
+            webhook_structured_logger.logger.info(f"🗑️ [TASK TRACKING] Task {task_id} removida de webhook {self.id}")
+    
+    def cancel_pending_tasks(self, reason: str = "Cancelamento manual"):
+        """Cancela todas as tasks pendentes do Celery para este webhook"""
+        from .logging_utils import webhook_structured_logger
+        
+        if not self.pending_task_ids:
+            webhook_structured_logger.logger.info(f"ℹ️ [TASK CANCEL] Nenhuma task pendente para cancelar no webhook {self.id}")
+            return 0
+        
+        cancelled_count = 0
+        
+        try:
+            from sms_sender.celery import app
+            
+            for task_id in self.pending_task_ids[:]:  # Cópia da lista para iterar
+                try:
+                    # Cancelar a task no Celery
+                    app.control.revoke(task_id, terminate=True)
+                    
+                    # Remover da lista
+                    self.remove_pending_task(task_id)
+                    cancelled_count += 1
+                    
+                    webhook_structured_logger.logger.info(f"🚫 [TASK CANCEL] Task {task_id} cancelada com sucesso - Razão: {reason}")
+                    
+                except Exception as e:
+                    webhook_structured_logger.logger.error(f"❌ [TASK CANCEL] Erro ao cancelar task {task_id}: {e}")
+            
+            webhook_structured_logger.logger.info(f"🎯 [TASK CANCEL] {cancelled_count} tasks canceladas para webhook {self.id} - Razão: {reason}")
+            
+        except Exception as e:
+            webhook_structured_logger.logger.error(f"💥 [TASK CANCEL] Erro ao acessar controle do Celery para webhook {self.id}: {e}")
+        
+        return cancelled_count
+    
+    def get_pending_tasks_count(self) -> int:
+        """Retorna o número de tasks pendentes"""
+        return len(self.pending_task_ids) if self.pending_task_ids else 0
 
 
 class SMSLog(models.Model):
