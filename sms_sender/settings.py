@@ -93,30 +93,47 @@ WSGI_APPLICATION = 'sms_sender.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# Para desenvolvimento
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
+# Configuração de banco de dados com PostgreSQL no Render
+DATABASE_URL = config('DATABASE_URL', default='postgresql://sms_sender_db_user:sBp2FOveuUAyowTeY6rKBEgjAsK8KM02@dpg-d0pr77je5dus73e4clqg-a.oregon-postgres.render.com/sms_sender_db')
 
-# Para produção com PostgreSQL
-DATABASE_URL = config('DATABASE_URL', default=None)
-if DATABASE_URL and not DATABASE_URL.startswith('postgresql://user:password'):
+# Parse da URL do banco de dados
+if DATABASE_URL:
     try:
-        DATABASES['default'] = dj_database_url.parse(DATABASE_URL)
-        # Configurações adicionais para produção
+        DATABASES = {
+            'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
+        }
+        
+        # Configurações específicas para PostgreSQL
         DATABASES['default'].update({
-            'CONN_MAX_AGE': 600,  # Conexões persistentes
+            'CONN_MAX_AGE': 600,  # Conexões persistentes por 10 minutos
             'OPTIONS': {
                 'connect_timeout': 10,
-                'server_side_binding': True,
+            },
+            'TEST': {
+                'NAME': 'test_' + DATABASES['default']['NAME'],
             }
         })
-    except ValueError as e:
-        print(f"Warning: Invalid DATABASE_URL format: {e}. Using SQLite as fallback.")
-        # Continue using SQLite as fallback
+        print(f"✅ Database configured: PostgreSQL at {DATABASES['default']['HOST']}")
+        
+    except Exception as e:
+        print(f"❌ Error parsing DATABASE_URL: {e}")
+        # Fallback para SQLite apenas em desenvolvimento
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / 'db.sqlite3',
+            }
+        }
+        print("⚠️ Using SQLite as fallback")
+else:
+    # Para desenvolvimento local sem DATABASE_URL
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+    print("🔧 Using SQLite for local development")
 
 
 # Password validation

@@ -27,6 +27,8 @@ services:
         value: 3
       - key: SERVICE_TYPE
         value: "web"
+      - key: DATABASE_URL
+        value: "postgresql://sms_sender_db_user:sBp2FOveuUAyowTeY6rKBEgjAsK8KM02@dpg-d0pr77je5dus73e4clqg-a/sms_sender_db"
 
   - type: worker
     name: sms-sender-worker
@@ -51,6 +53,8 @@ services:
         value: "worker"
       - key: IS_WORKER
         value: true
+      - key: DATABASE_URL
+        value: "postgresql://sms_sender_db_user:sBp2FOveuUAyowTeY6rKBEgjAsK8KM02@dpg-d0pr77je5dus73e4clqg-a/sms_sender_db"
 
   - type: worker
     name: sms-sender-beat
@@ -73,6 +77,8 @@ services:
         value: "beat"
       - key: IS_BEAT
         value: true
+      - key: DATABASE_URL
+        value: "postgresql://sms_sender_db_user:sBp2FOveuUAyowTeY6rKBEgjAsK8KM02@dpg-d0pr77je5dus73e4clqg-a/sms_sender_db"
 
 databases:
   - name: sms-sender-db
