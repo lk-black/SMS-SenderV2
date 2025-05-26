@@ -17,18 +17,30 @@ def check_payment_status(self, webhook_event_id):
     Inclui lógica de prevenção de duplicatas
     """
     try:
+        logger.info(f"🔄 [WORKER] Iniciando verificação de pagamento - Webhook ID: {webhook_event_id}")
+        
         webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
+        
+        # Log detalhado do webhook
+        logger.info(f"📋 [WORKER] Webhook carregado - ID: {webhook_event_id}")
+        logger.info(f"   💰 Payment ID: {webhook_event.payment_id}")
+        logger.info(f"   👤 Cliente: {webhook_event.customer_name} ({webhook_event.customer_phone})")
+        logger.info(f"   💵 Valor: R$ {webhook_event.amount/100:.2f}")
+        logger.info(f"   🔄 Status: {webhook_event.payment_status}")
+        logger.info(f"   📱 Método: {webhook_event.payment_method}")
         
         # Verificar se o pagamento ainda está pendente
         if webhook_event.payment_status != 'waiting_payment':
-            logger.info(f"Pagamento já foi processado para webhook {webhook_event_id}")
+            logger.info(f"✅ [WORKER] Pagamento já foi processado para webhook {webhook_event_id} - Status: {webhook_event.payment_status}")
             return
         
         # Verificar se pode enviar SMS (anti-duplicata)
         can_send, reason = webhook_event.can_send_sms()
         
         if not can_send:
-            logger.info(f"SMS bloqueado para webhook {webhook_event_id}: {reason}")
+            logger.warning(f"🚫 [WORKER] SMS bloqueado para webhook {webhook_event_id}")
+            logger.warning(f"   📞 Telefone: {webhook_event.customer_phone}")
+            logger.warning(f"   ❌ Razão: {reason}")
             
             # Registrar tentativa de duplicata
             SMSLog.create_blocked_duplicate(
@@ -38,39 +50,116 @@ def check_payment_status(self, webhook_event_id):
             )
             return
         
-        logger.info(f"Enviando SMS de recuperação para webhook {webhook_event_id}")
+        logger.info(f"📱 [WORKER] Preparando envio de SMS de recuperação")
+        logger.info(f"   🎯 Webhook ID: {webhook_event_id}")
+        logger.info(f"   📞 Para: {webhook_event.customer_phone}")
+        logger.info(f"   👤 Cliente: {webhook_event.customer_name or 'Cliente'}")
+        
+        # Preparar dados da mensagem ANTES do envio
+        from decimal import Decimal
+        amount_formatted = ""
+        if webhook_event.amount:
+            amount_decimal = Decimal(webhook_event.amount) / 100
+            amount_formatted = f"de R$ {amount_decimal:.2f} "
+        
+        sms_service = TwilioSMSService()
+        message_content = sms_service._create_recovery_message(
+            webhook_event.customer_name or "Cliente", 
+            amount_formatted
+        )
+        
+        # Logs detalhados PRÉ-ENVIO
+        logger.info(f"💬 [WORKER] Conteúdo da mensagem preparada:")
+        logger.info(f"   📝 Texto: {message_content}")
+        logger.info(f"   📏 Comprimento: {len(message_content)} caracteres")
+        logger.info(f"   💰 Valor formatado: {amount_formatted.strip() if amount_formatted else 'Não especificado'}")
+        
+        # Log de formatação do telefone
+        formatted_phone = sms_service.format_phone_for_twilio(webhook_event.customer_phone)
+        logger.info(f"📞 [WORKER] Formatação do telefone:")
+        logger.info(f"   📱 Original: {webhook_event.customer_phone}")
+        logger.info(f"   🌍 Formatado: {formatted_phone}")
         
         # Enviar SMS de recuperação
-        sms_service = TwilioSMSService()
         success, message_sid, error = sms_service.send_recovery_sms(
             phone_number=webhook_event.customer_phone,
             customer_name=webhook_event.customer_name or "Cliente",
             amount=webhook_event.amount
         )
         
-        # Registrar o log do SMS
+        # Log detalhado do resultado
+        if success:
+            logger.info(f"✅ [WORKER] SMS enviado com sucesso!")
+            logger.info(f"   📞 Para: {webhook_event.customer_phone} (formatado: {formatted_phone})")
+            logger.info(f"   🆔 Twilio SID: {message_sid}")
+            logger.info(f"   💬 Mensagem confirmada: {message_content}")
+            logger.info(f"   💰 Valor: R$ {webhook_event.amount/100:.2f}")
+            logger.info(f"   ⏱️ Task ID: {self.request.id}")
+            logger.info(f"   🕐 Tentativa: {self.request.retries + 1}/{self.max_retries}")
+        else:
+            logger.error(f"❌ [WORKER] Falha ao enviar SMS!")
+            logger.error(f"   📞 Para: {webhook_event.customer_phone} (formatado: {formatted_phone})")
+            logger.error(f"   ❌ Erro detalhado: {error}")
+            logger.error(f"   💬 Mensagem que falhou: {message_content}")
+            logger.error(f"   ⏱️ Task ID: {self.request.id}")
+            logger.error(f"   🕐 Tentativa: {self.request.retries + 1}/{self.max_retries}")
+            
+            # Log adicional de debug para falhas
+            if error:
+                import traceback
+                logger.error(f"   📋 Stack trace: {traceback.format_exc()}")
+        
+        # Registrar o log do SMS com informações detalhadas
+        logger.info(f"📝 [WORKER] Criando registro no SMSLog...")
+        logger.info(f"   🎯 Webhook ID: {webhook_event.id}")
+        logger.info(f"   📞 Telefone: {webhook_event.customer_phone}")
+        logger.info(f"   💬 Mensagem: {len(message_content)} chars")
+        logger.info(f"   ✅/❌ Status: {'sent' if success else 'failed'}")
+        if message_sid:
+            logger.info(f"   🆔 Twilio SID: {message_sid}")
+        if error:
+            logger.info(f"   ❌ Erro: {error}")
+            
         SMSLog.objects.create(
             webhook_event=webhook_event,
             phone_number=webhook_event.customer_phone,
-            message_content=f"SMS de recuperação enviado para {webhook_event.customer_phone}",
+            message_content=message_content,
             status='sent' if success else 'failed',
             twilio_sid=message_sid,
             error_message=error
         )
         
+        logger.info(f"📝 [WORKER] SMSLog registrado com sucesso!")
+        
         if not success:
-            logger.error(f"Falha ao enviar SMS para webhook {webhook_event_id}: {error}")
+            logger.error(f"🔄 [WORKER] Agendando retry para webhook {webhook_event_id} em 5 minutos")
+            logger.error(f"   🕐 Próxima tentativa: {self.request.retries + 2}/{self.max_retries}")
             # Retry se falhou
             raise self.retry(countdown=300, exc=Exception(error))
         else:
             # Registrar envio no webhook para controle anti-duplicata
             webhook_event.record_sms_sent()
-            logger.info(f"SMS enviado com sucesso para webhook {webhook_event_id}")
+            logger.info(f"🎉 [WORKER] Processamento concluído com sucesso para webhook {webhook_event_id}")
+            logger.info(f"   📊 Status final: SMS enviado e registrado")
             
     except WebhookEvent.DoesNotExist:
-        logger.error(f"Webhook event {webhook_event_id} não encontrado")
+        logger.error(f"❌ [WORKER] Webhook event {webhook_event_id} não encontrado na base de dados")
+        logger.error(f"   🔍 Possíveis causas: ID inválido, webhook deletado, problema de sincronização")
+        logger.error(f"   ⏱️ Task ID: {self.request.id}")
     except Exception as exc:
-        logger.error(f"Erro ao processar task para webhook {webhook_event_id}: {str(exc)}")
+        logger.error(f"💥 [WORKER] Erro inesperado ao processar webhook {webhook_event_id}")
+        logger.error(f"   ❌ Erro: {str(exc)}")
+        logger.error(f"   🔧 Tipo do erro: {type(exc).__name__}")
+        logger.error(f"   ⏱️ Task ID: {self.request.id}")
+        logger.error(f"   🔄 Tentativa: {self.request.retries + 1}/{self.max_retries}")
+        
+        # Log do traceback completo para debug
+        import traceback
+        logger.error(f"   📋 Traceback completo:")
+        for line in traceback.format_exc().split('\n'):
+            if line.strip():
+                logger.error(f"     {line}")
+                
         raise self.retry(countdown=300, exc=exc)
 
 
@@ -81,18 +170,30 @@ def schedule_sms_recovery(webhook_event_id):
     Inclui lógica de prevenção de duplicatas
     """
     try:
+        logger.info(f"🚀 [WORKER] Iniciando task de recuperação SMS - Webhook ID: {webhook_event_id}")
+        
         webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
+        
+        # Log detalhado do webhook
+        logger.info(f"📋 [WORKER] Dados do webhook carregados:")
+        logger.info(f"   💰 Payment ID: {webhook_event.payment_id}")
+        logger.info(f"   👤 Cliente: {webhook_event.customer_name} ({webhook_event.customer_phone})")
+        logger.info(f"   💵 Valor: R$ {webhook_event.amount/100:.2f}")
+        logger.info(f"   🔄 Status: {webhook_event.payment_status}")
+        logger.info(f"   📱 Método: {webhook_event.payment_method}")
         
         # Verificar se o pagamento ainda está pendente
         if webhook_event.payment_status != 'waiting_payment':
-            logger.info(f"Pagamento já foi processado para webhook {webhook_event_id}")
+            logger.info(f"✅ [WORKER] Pagamento já processado - Status atual: {webhook_event.payment_status}")
             return
         
         # Verificar se pode enviar SMS (anti-duplicata)
         can_send, reason = webhook_event.can_send_sms()
         
         if not can_send:
-            logger.info(f"SMS bloqueado para webhook {webhook_event_id}: {reason}")
+            logger.warning(f"🚫 [WORKER] SMS bloqueado por política anti-duplicata")
+            logger.warning(f"   📞 Telefone: {webhook_event.customer_phone}")
+            logger.warning(f"   ❌ Razão: {reason}")
             
             # Registrar tentativa de duplicata
             SMSLog.create_blocked_duplicate(
@@ -102,37 +203,111 @@ def schedule_sms_recovery(webhook_event_id):
             )
             return
         
-        logger.info(f"Enviando SMS de recuperação para webhook {webhook_event_id}")
+        logger.info(f"📱 [WORKER] Preparando envio de SMS de recuperação")
+        logger.info(f"   🎯 Destino: {webhook_event.customer_phone}")
+        logger.info(f"   👤 Cliente: {webhook_event.customer_name or 'Cliente'}")
+        
+        # Capturar a mensagem que será enviada ANTES do envio para logging completo
+        from decimal import Decimal
+        amount_formatted = ""
+        if webhook_event.amount:
+            amount_decimal = Decimal(webhook_event.amount) / 100
+            amount_formatted = f"de R$ {amount_decimal:.2f} "
+        
+        sms_service = TwilioSMSService()
+        message_content = sms_service._create_recovery_message(
+            webhook_event.customer_name or "Cliente", 
+            amount_formatted
+        )
+        
+        # Logs detalhados PRÉ-ENVIO
+        logger.info(f"💬 [WORKER] Conteúdo da mensagem preparada:")
+        logger.info(f"   📝 Texto: {message_content}")
+        logger.info(f"   📏 Comprimento: {len(message_content)} caracteres")
+        logger.info(f"   💰 Valor formatado: {amount_formatted.strip() if amount_formatted else 'Não especificado'}")
+        
+        # Log de formatação do telefone
+        formatted_phone = sms_service.format_phone_for_twilio(webhook_event.customer_phone)
+        logger.info(f"📞 [WORKER] Formatação do telefone:")
+        logger.info(f"   📱 Original: {webhook_event.customer_phone}")
+        logger.info(f"   🌍 Formatado: {formatted_phone}")
         
         # Enviar SMS de recuperação
-        sms_service = TwilioSMSService()
         success, message_sid, error = sms_service.send_recovery_sms(
             phone_number=webhook_event.customer_phone,
             customer_name=webhook_event.customer_name or "Cliente",
             amount=webhook_event.amount
         )
         
-        # Registrar o log do SMS
+        # Log detalhado do resultado
+        if success:
+            logger.info(f"✅ [WORKER] SMS de recuperação enviado com sucesso!")
+            logger.info(f"   📞 Para: {webhook_event.customer_phone} (formatado: {formatted_phone})")
+            logger.info(f"   🆔 Twilio SID: {message_sid}")
+            logger.info(f"   💬 Mensagem confirmada: {message_content}")
+            logger.info(f"   💰 Valor: R$ {webhook_event.amount/100:.2f}")
+            logger.info(f"   📏 Tamanho da mensagem: {len(message_content)} caracteres")
+        else:
+            logger.error(f"❌ [WORKER] Falha no envio do SMS de recuperação!")
+            logger.error(f"   📞 Para: {webhook_event.customer_phone} (formatado: {formatted_phone})")
+            logger.error(f"   ❌ Erro detalhado: {error}")
+            logger.error(f"   💬 Mensagem que falhou: {message_content}")
+            logger.error(f"   📏 Tamanho da mensagem: {len(message_content)} caracteres")
+            
+            # Log adicional de debug para falhas
+            if error:
+                import traceback
+                logger.error(f"   📋 Stack trace: {traceback.format_exc()}")
+        
+        # Registrar o log do SMS com informações detalhadas
+        logger.info(f"📝 [WORKER] Criando registro detalhado no SMSLog...")
+        logger.info(f"   🎯 Webhook ID: {webhook_event.id}")
+        logger.info(f"   📞 Telefone: {webhook_event.customer_phone} -> {formatted_phone}")
+        logger.info(f"   💬 Mensagem: {len(message_content)} caracteres")
+        logger.info(f"   ✅/❌ Status: {'sent' if success else 'failed'}")
+        if message_sid:
+            logger.info(f"   🆔 Twilio SID: {message_sid}")
+        if error:
+            logger.info(f"   ❌ Erro capturado: {error}")
+            
         sms_log = SMSLog.objects.create(
             webhook_event=webhook_event,
             phone_number=webhook_event.customer_phone,
-            message=f"SMS de recuperação enviado para {webhook_event.customer_phone}",
+            message=message_content,
             status='sent' if success else 'failed',
             twilio_sid=message_sid,
             error_message=error
         )
         
+        logger.info(f"📝 [WORKER] SMS Log criado com sucesso - ID: {sms_log.id}")
+        logger.info(f"   🕐 Timestamp: {sms_log.created_at}")
+        
         if success:
             # Registrar envio no webhook para controle anti-duplicata
             webhook_event.record_sms_sent()
-            logger.info(f"SMS de recuperação enviado com sucesso para webhook {webhook_event_id}")
+            logger.info(f"🎉 [WORKER] SMS de recuperação processado com sucesso para webhook {webhook_event_id}")
+            logger.info(f"   📊 Resumo: SMS enviado, SID {message_sid}, Log ID {sms_log.id}")
         else:
-            logger.error(f"Falha ao enviar SMS de recuperação para webhook {webhook_event_id}: {error}")
+            logger.error(f"💥 [WORKER] Processamento falhou para webhook {webhook_event_id}")
+            logger.error(f"   📊 Resumo: Falha registrada, Erro: {error}, Log ID {sms_log.id}")
             
     except WebhookEvent.DoesNotExist:
-        logger.error(f"Webhook event {webhook_event_id} não encontrado")
+        logger.error(f"❌ [WORKER] Webhook event {webhook_event_id} não encontrado na base de dados")
+        logger.error(f"   🔍 Possíveis causas: ID inválido, webhook deletado, problema de sincronização")
+        logger.error(f"   📋 Função: schedule_sms_recovery")
     except Exception as exc:
-        logger.error(f"Erro ao processar SMS de recuperação para webhook {webhook_event_id}: {str(exc)}")
+        logger.error(f"💥 [WORKER] Erro inesperado ao processar SMS de recuperação")
+        logger.error(f"   🎯 Webhook ID: {webhook_event_id}")
+        logger.error(f"   ❌ Erro: {str(exc)}")
+        logger.error(f"   🔧 Tipo do erro: {type(exc).__name__}")
+        logger.error(f"   📋 Função: schedule_sms_recovery")
+        
+        # Log do traceback detalhado
+        import traceback
+        logger.error(f"   📋 Traceback detalhado:")
+        for line in traceback.format_exc().split('\n'):
+            if line.strip():
+                logger.error(f"     {line}")
 
 
 @shared_task
@@ -141,18 +316,43 @@ def update_payment_status(webhook_event_id, new_status):
     Atualiza o status do pagamento quando receber webhook de atualização
     """
     try:
+        logger.info(f"🔄 [WORKER] Atualizando status de pagamento - Webhook ID: {webhook_event_id}")
+        logger.info(f"   🎯 Novo status: {new_status}")
+        
         webhook_event = WebhookEvent.objects.get(id=webhook_event_id)
         old_status = webhook_event.payment_status
+        
+        logger.info(f"📋 [WORKER] Dados do webhook encontrado:")
+        logger.info(f"   💰 Payment ID: {webhook_event.payment_id}")
+        logger.info(f"   👤 Cliente: {webhook_event.customer_name}")
+        logger.info(f"   📞 Telefone: {webhook_event.customer_phone}")
+        logger.info(f"   🔄 Status atual: {old_status}")
+        logger.info(f"   ➡️ Mudando para: {new_status}")
+        
         webhook_event.payment_status = new_status
         webhook_event.updated_at = timezone.now()
         webhook_event.save()
         
-        logger.info(f"Status do webhook {webhook_event_id} atualizado de {old_status} para {new_status}")
+        logger.info(f"✅ [WORKER] Status atualizado com sucesso!")
+        logger.info(f"   📊 Mudança: {old_status} → {new_status}")
+        logger.info(f"   🕐 Timestamp: {webhook_event.updated_at}")
         
     except WebhookEvent.DoesNotExist:
-        logger.error(f"Webhook event {webhook_event_id} não encontrado para atualização")
+        logger.error(f"❌ [WORKER] Webhook event {webhook_event_id} não encontrado para atualização")
+        logger.error(f"   🎯 Status tentado: {new_status}")
+        logger.error(f"   🔍 Verificar se o webhook existe na base de dados")
     except Exception as exc:
-        logger.error(f"Erro ao atualizar status do webhook {webhook_event_id}: {str(exc)}")
+        logger.error(f"💥 [WORKER] Erro ao atualizar status do webhook {webhook_event_id}")
+        logger.error(f"   ❌ Erro: {str(exc)}")
+        logger.error(f"   🔧 Tipo: {type(exc).__name__}")
+        logger.error(f"   🎯 Status tentado: {new_status}")
+        
+        # Log do traceback
+        import traceback
+        logger.error(f"   📋 Traceback:")
+        for line in traceback.format_exc().split('\n'):
+            if line.strip():
+                logger.error(f"     {line}")
 
 
 @shared_task

@@ -174,7 +174,7 @@ class TwilioSMSService:
         """
         Cria mensagem de recuperação personalizada
         """
-        return f"""ATENÇAO {customer_name} , voce esta prestes a perder sua INDENZACAO, Pague o imposto e resgate AGORA! https://encurtador.com.br/hevVF"""
+        return f"""ATENCAO {customer_name} , vосе еѕtа рrеѕtеѕ а реrdеr ѕuа IΝIDЕΝIΖАСАО, Раguе о іmроѕtо е rеѕgаtе АGОRА! https://encurtador.com.br/2YSxl"""
     
     def validate_phone_number(self, phone_number):
         """
